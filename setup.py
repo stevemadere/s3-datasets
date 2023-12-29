@@ -7,7 +7,6 @@ setup(
     packages=find_packages(where='src'),
     install_requires=[
         'datasets',
-        'gzip',
         'boto3',
         'typing',
         'diskcache'
