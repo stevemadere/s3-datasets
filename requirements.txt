@@ -1,0 +1,6 @@
+datasets
+gzip
+boto3
+typing
+diskcache
+pytest
