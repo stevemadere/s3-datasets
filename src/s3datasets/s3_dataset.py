@@ -33,9 +33,7 @@ class S3Dataset:
         s3_dataset: S3Dataset  = cls(bucket_name)
         if not key_list:
             key_list = s3_dataset._get_keys(prefix if prefix else '')
-        print("key_list is " + key_list.__repr__())
         keys_dataset = datasets.Dataset.from_dict({"key" : key_list})
-        print(keys_dataset[1])
         #full_dataset = keys_dataset.with_transform(lambda x: { "key": x["key"], "text": s3_text_dataset._load_and_decode_obj(x["key"]) })
         full_dataset = keys_dataset.with_transform(s3_dataset.augment_batch_with_content)
         return full_dataset
@@ -78,7 +76,6 @@ class S3Dataset:
         return content
     
     def _load_and_decode_obj(self, key: str) -> str:
-        print("loading " + key.__repr__())
         obj_data: bytes = self._load_obj(key)
         if key.endswith('.gz'):
             # Decompress the content
