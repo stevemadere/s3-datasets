@@ -9,8 +9,8 @@ setup(
         'datasets',
         'boto3',
         'typing',
-        'diskcache'
-        'transformers'
+        'diskcache',
+        'transformers',
         'torch'
     ],
 )
