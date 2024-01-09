@@ -1,0 +1,1038 @@
+# AUTOPEFT: Automatic Configuration Search for
+# Parameter-Efficient Fine-Tuning
+
+_ Han Zhou^{1,*}
+Xingchen Wan^{2,*}
+Ivan Vuli´c^{1}
+Anna Korhonen^{1}
+^{1}Language Technology Lab, University of Cambridge
+^{2}Machine Learning Research Group, University of Oxford
+{hz416, iv250, alk23}@cam.ac.uk
+xwan@robots.ox.ac.uk _
+
+## Abstract
+
+Large pretrained language models are widely used in downstream NLP tasks via
+task-specific fine-tuning, but such procedures can be costly. Recently,
+Parameter-Efficient Fine-Tuning (PEFT) methods have achieved strong task
+performance while updating a much smaller number of parameters compared to full
+model fine-tuning (FFT). However, it is non-trivial to make informed design
+choices on the PEFT configurations, such as their architecture, the number of
+tunable parameters, and even the layers in which the PEFT modules are inserted.
+Consequently, it is highly likely that the current, manually designed
+configurations are suboptimal in terms of their performance-efficiency
+trade-off. Inspired by advances in neural architecture search, we propose
+AUTOPEFT for automatic PEFT configuration selection: we first design an
+expressive configuration search space with multiple representative PEFT modules
+as building blocks. Using multi-objective Bayesian optimisation in a low-cost
+setup, we then discover a Pareto-optimal set of configurations with strong
+performance-cost trade-offs across different numbers of parameters that are also
+highly transferable across different tasks. Empirically, on GLUE and SuperGLUE
+tasks, we show that AUTOPEFT-discovered configurations significantly outperform
+existing PEFT methods and are on par or better than FFT, without incurring
+substantial training efficiency costs.
+
+### Figure and Table Captions:
+
+* Figure 1: Performance of AUTOPEFT-discovered configurations (AutoPEFT &
+AutoPEFT(per-task); see details in Table 1) compared to other baseline PEFT
+methods (markers) and full model FT that updates 100% of parameters (dashed
+horizontal bar), averaged across 8 GLUE tasks. Our approach achieves the best
+trade-off between task performance and parameter efficiency.
+
+* Figure 2: Illustration of the AUTOPEFT search space which combines both
+layer-level (Layers) and within-layer (Serial, Parallel, Prefix) search, and the
+connections within a layer (Left). We further show two possible configurations
+in the search space (Right): note that some PEFT layers can be inactive
+altogether and the searchable module sizes (shaded in green), i.e. the
+bottleneck sizes in Serial and Parallel (D_{SA} and D_{PA} respectively) and
+sizes of P_{K}, P_{V} in Prefix (L_{PT}), are dynamic.
+
+* Figure 3: Illustration of the Pareto-optimal search with multi-objective
+Bayesian optimisation (BO; §2.2): The BO agent trains on the vector
+representations of the evaluated configurations as inputs and their performance
+under a low-fidelity setup (e.g. accuracy - obtained by fine-tuning the language
+model with the PEFT configuration for a small number of iterations) and cost
+(e.g. number of parameters) as targets. The BO agent then iteratively suggests
+new configurations until convergence.
+
+* Table 1: Results on the GLUE benchmark with BERT_{base} (tasks are ranked in an
+ascending order of training resources required from left to right). For^{
+AUTO}PEFT^{RTE}, we search on RTE with a low-fidelity proxy, training for 1
+epoch per iteration, only at a search cost of 1.9% (in terms of additional
+fine-tuning steps required) over the full GLUE experiment. We report the average
+fine-tuned parameters of per-task AUTOPEFT, where we conduct additional per-task
+searches on RTE, MRPC, STS-B, and CoLA, and take best-found configurations for
+the remaining tasks. We report Spearman's Correlation for STS-B, Matthew's
+Correlation for CoLA, and accuracy for all other tasks (matched accuracy for
+MNLI). The percentage of parameters is the ratio of the number of additional
+parameters to the pretrained parameters. We reproduce all baselines and report
+the mean and standard deviation of all results for 5 random seeds. The best,
+second-best, and third-best results are marked in bold fonts and ranked by
+colour.
+
+* Table 2: Specification of the discovered AUTOPEFT configuration reported in
+Table 1 (^{AUTO}PEFT^{RTE}) using BERT_{base}.
+
+* Table 3: Results on SuperGLUE tasks with AUTOPEFT-discovered configurations
+searched on RTE with BERT_{base} as the underlying PLM. We split 10% of the
+training set as the new validation set, and report the ^{AUTO}PEFT^{RTE}-found
+configuration transfer results on the evaluation set over five random seeds.
+
+* Figure 4: The Pareto fronts of AUTOPEFT on RTE, MRPC, STS-B, and CoLA compared
+to baselines on BERT_{base}, over varying parameter budgets. We report the
+single-seed task score but otherwise follow the settings in Table 1.
+
+* Table 4: Experimental results on GLUE with RoBERTa_{large}. We report the full
+model fine-tuning^{†} results from Liu et al. (2019b) with Pearson correlation
+for STS-B. We include the LoRA^{‡} module performance from Hu et al. (2022a). We
+exclude QQP and MNLI tasks due to the large computation cost of RoBERTa_{large}.
+Consistent with Table 1, we again report AUTOPEFT results searched on RTE in
+full-resource settings that are then transferred all included GLUE tasks
+(AUTOPEFT^{RTE}) and per-task AUTOPEFT (AUTOPEFT^{task} _{Avg.}) but on
+RoBERTa_{large}.
+
+* Figure 5: Pairwise transferability study of AUTOPEFT-discovered configurations:
+each row (Ours^{[task]}) denotes the performances of the AUTOPEFT configuration
+searched from [task] (e.g. RTE) to the task itself and 3 other GLUE tasks. The
+results show that AUTOPEFT performance is largely robust to the choice of which
+task to search on.
+
+* Figure 6: The distribution of the discovered configurations via BO (orange,
+described in §2.2 and random search (grey) using the same total number of
+evaluations (200). Both searches use the same, 100 random initialising points
+(blue) on RTE. Note that for configurations with similar accuracy, the
+BO-generated configurations typically have much better parameter efficiency.
+
+* Figure 7: The performance of AUTOPEFT with ablation of search space on RTE on
+BERT_{base}. The SA results refer to the Pfeiffer adapter (Pfeiffer et al.,
+2020b) with an enumeration of its bottleneck size. For other search spaces, we
+report the Pareto front of AUTOPEFT-found configurations, where SA-PA-PT-Layer
+forms the search space of AUTOPEFT.
+
+* Table 5: Comparing AUTOPEFT to layer selection baselines with the same parameter
+budget on BERT_{large}. We report the Pfeiffer adapter for all 24 layers
+(Serial), specialised AdapterDrop (Rücklé et al., 2021) that inserts SA for the
+last 13 layers, and AA^{uni} (Moosavi et al., 2022) without its rational
+activation function with 13 selected layers (Adaptable Adapter). We run our
+AUTOPEFT under the comparable search space of 24 layers and approximately match
+the size of Serial.
+
+* Table 6: The search space of the AUTOPEFT. Each insertion layer has a Boolean
+decision for inserting the PEFT modules. The 0 size of submodules indicates that
+we exclude the corresponding submodule from the configuration. The total number
+of configurations for BERT_{base}: 2^{12} × 11 × 11 × 11 ≈ 5 × 10^{6} and for
+BERT/RoBERTa_{large}: 2^{24} × 12 × 12 × 12 ≈ 3 × 10^{10}.
+
+* Table 7: The AUTOPEFT-found configurations reported in Table 1 using
+BERT_{base}. The average of fine-tuned parameters (%) of AUTOPEFT^{task} _{Avg.}
+is calculated by (1.42 + 3.86 + 1.06 + 0.29 + 1.42 + 0.30 + 1.42 + 1.42)/8 =
+1.40, where we transfer the best-found configurations to SST-2, QNLI, QQP, and
+MNLI as their best per-task configurations for achieving the best trade-off
+between task performance and efficiency.
+
+* Table 8: The AUTOPEFT-found configurations reported in Table 5 using
+BERT_{large}.
+
+* Table 9: The AUTOPEFT-found configurations reported in Table 4 using
+RoBERTa_{large}. The average of fine-tuned parameters (%) of AUTOPEFT^{task}
+_{Avg.} is calculated by (0.03 + 0.25 + 0.25 + 2.36 + 2.36 + 0.03)/6 = 0.88,
+where we transfer the best-found AUTOPEFT^{CoLA} to SST-2 and AUTOPEFT^{RTE} to
+QNLI as their best per-task configurations for achieving the best trade-off
+between performance and efficiency.
+
+## 1 Introduction and Motivation
+
+Pretrained language models (PLM) are used in downstream tasks via the standard
+transfer learning paradigm, where they get fine-tuned for particular tasks
+(Devlin et al., 2019; Liu et al., 2019b).
+
+This achieves state-of-the-art results in a wide spectrum of NLP tasks, becoming
+a prevalent modelling paradigm in NLP (Raffel et al., 2020). Fine-tuning the
+PLMs typically requires a full update of their original parameters (i.e. the
+so-called full-model fine-tuning (FFT)); however, this is 1) computationally
+expensive and also 2) storage-wise expensive as it requires saving a separate
+full model copy for each task-tuned model. With the ever-growing size of the
+PLMs (Brown et al., 2020; Sanh et al., 2022), the cost of full model FT becomes
+a major bottleneck, due to its increasing demands as well as computational (time
+and space) non-efficiency. Parameter-Efficient Fine-Tuning (PEFT) delivers a
+solution for alleviating the issues with full-model FT (Houlsby et al., 2019).
+By freezing the majority of pretrained weights of PLMs, PEFT approaches only
+update a small portion of parameters for efficiently adapting the PLM to a new
+downstream task. Recent studies have shown that PEFT can achieve competitive
+task performance while being modular, adaptable, and preventing catastrophic
+forgetting in comparison to traditional FFT (Wang et al., 2022; Pfeiffer et al.,
+2023).
+
+Recent developments have created diverse PEFT modules with distinctive
+characteristics (Pfeiffer et al., 2020b; Li and Liang, 2021), with one of the
+two main aims in focus: 1) to improve task performance over other PEFT
+approaches while maintaining the same parameter budget as the competitor PEFT
+methods; or 2) to maintain task performance while reducing the parameter budget
+needed. Existing PEFT modules, optimising for one of the two aims, have been
+successfully applied to transfer learning tasks (Chen et al., 2022b; Pfeiffer et
+al., 2022). However, different tasks, with different complexity, show distinct
+sensitivity to the allocated parameter budget and even to the chosen PEFT
+approach (He et al., 2022). At the same time, most PEFT applications are limited
+to a single PEFT architecture (e.g. serial adapters, prefix-tuning) with fixed
+decisions on its components (e.g. hidden size dimensionality, insertion layers)
+resulting in potentially suboptimal PEFT configurations across many tasks.
+Therefore, in this work, we propose a new, versatile and unified framework that
+automatically searches for improved and task-adapted PEFT configurations, aiming
+to effectively balance between the two (often colliding goals) of improving
+performance and keeping the desired low parameter budget for PEFT.
+
+While recent research has started exploring more dynamic PEFT configurations,
+the prior studies remain limited across several dimensions, including how they
+define the configuration search space. Namely, they typically focus only on a
+single PEFT architecture (e.g. adapters) or their simple combinations, or a
+single property (e.g. insertion layers - where to insert the module); the
+readers are referred to a short overview later in §3. Here, we propose a unified
+and more comprehensive framework for improved configuration search. It covers
+multiple standard PEFT modules (serial adapters, parallel adapters, and
+prefix-tuning) as building blocks, combined with the critical parameter
+budget-related decisions: the size of each constituent module and the insertion
+layers for the modules.
+
+Our defined comprehensive search space is huge; as a consequence, traversing it
+effectively and efficiently is extremely challenging. To enable search over the
+large configuration space, we thus propose the novel AUTOPEFT framework. It
+automatically configures multiple PEFT modules along with their
+efficiency-oriented design decisions, relying on a high-dimensional Bayesian
+optimisation (BO) approach. Crucially, within the search space, we propose a
+multi-objective optimisation which learns to simultaneously balance between
+maximising the searched configurations' task performance and parameter
+efficiency. We conduct extensive experiments on the standard GLUE and SuperGLUE
+benchmarks (Wang et al., 2018, 2019). We first study the transferability of the
+AUTOPEFT-searched architecture by running AUTOPEFT on a single task with a
+low-fidelity proxy (aiming to reduce computational cost), followed by
+transferring the found architecture to other tasks. Experimental results show
+that this architecture can outperform existing PEFT baselines while achieving
+on-par performance with the standard FFT. Further slight gains can be achieved
+with a larger computation budget for training, where we run AUTOPEFT per each
+single task to find a task-adapted PEFT configuration. As demonstrated in Figure
+1, AUTOPEFT is able to find configurations that offer a solid trade-off between
+task performance and parameter efficiency, even outperforming FFT. We also
+provide ablation studies over the search space, validating that the AUTOPEFT
+framework is versatile and portable to different search spaces.
+
+Contributions. 1) We propose the AUTOPEFT search space containing diverse and
+expressive combinations of PEFT configurations from three representative PEFT
+modules as foundational building blocks and the binary decisions concerning
+Transformer layers for inserting these modules as searchable dimensions. 2) To
+navigate the vast AUTOPEFT search space and to discover a set of transferable
+PEFT configurations that optimally trade performance against cost across various
+parameter ranges in a single run, we further propose an effective search method
+based on multi-dimensional Bayesian optimisation. 3) We demonstrate that the
+one-time search cost of AUTOPEFT is cheap, and AUTOPEFT yields task-shareable
+configurations, outperforming existing PEFT modules while being transferable
+across tasks. The AUTOPEFT framework can also be easily extended to other and
+new PEFT modules.
+
+## 2 ^{AUTO}PEFT Framework
+
+## 2.1 Designing the AUTOPEFT Search Space
+
+Inspired by the success of neural architecture search (NAS), we similarly start
+by designing a large and expressive configuration space. We additionally provide
+the motivation behind each decision to include a particular module and its
+components in the configuration space, along with a mathematical formulation.
+
+The search space is known to be one of the most important factors in the
+performance of the configurations to be discovered subsequently (Ru et al.,
+2020; Xie et al., 2019; Li and Talwalkar, 2019; Dong and Yang, 2020; Yang et
+al., 2020). In order to simultaneously maximise task performance along with
+parameter efficiency, it is necessary to first define a 'parameter-reducible'
+search space, where each dimension within the space potentially contributes to
+reducing the parameter budget. Similarly, each dimension might potentially bring
+a positive impact on the task performance without introducing redundancy in the
+space (Wan et al., 2022). Therefore, as shown in Figure 2, we propose the search
+space with representative PEFT modules, as follows, spanning a plethora of
+(non-redundant) configurations.
+
+PEFT Modules. Inspired by common practices in NAS of using known well-performing
+modules as building blocks, we include three distinctive PEFT designs to
+efficiently adapt different forwarding stages of hidden states in the PLM
+layers. We combine Serial Adapters (SA), Parallel Adapters (PA), and
+Prefix-Tuning (PT) as the three representative modules in the search space as
+the building blocks, where the PT module adapts the multi-head attention layer,
+and SA and PA interact with the FFN layer (Figure 2). Each configuration makes
+two decisions on each of the PEFT modules in the insertion layer: the binary
+decision on whether it is 'switched' on or off, and, when it is switched on, its
+actual module size (see the next paragraph). As we empirically validate later,
+the resultant search space spanned by the building blocks is extremely
+expressive and flexible, and enables the discovery of configurations that
+outscore any of the individual building blocks.
+
+Size. Previous studies show that PEFT methods are highly sensitive to the number
+of tunable parameters: adaptively setting their capacity in accordance with the
+target task is therefore essential for achieving good performance (Chen et al.,
+2022a). The number of tunable parameters depends on each particular module. The
+additional parameters introduced by both SA and PA are dominated by their
+bottleneck dimension D. Similarly, the size of the PT module is defined by its
+prefix length L_{PT}. Thus, we introduce a searchable dimension for each of
+D_{SA}, D_{PA}, and L_{PT} whose possible values span from 0, which indicates
+the module is 'switched off' or disabled, to D_{h}, where D_{h} is the
+dimensionality of the output embedding of the PLM (e.g. D_{h}=768 for
+BERT_{base}).
+
+Insertion Layers. Prior work has also shown that different layers in the PLMs
+store different semantic information (Vuli´c et al., 2020), where the higher
+layers produce more task-specific and contextualised representations (Tenney et
+al., 2019). Therefore, adapting all layers may potentially result in overfitting
+to the target task while being suboptimal. We then introduce another set of
+searchable dimensions which control the 'insertion' decision at each layer l_{i}
+- the aim is to search for configurations that are high-performing yet
+parsimonious in inserting PEFT modules.
+
+Combining PEFT Modules. The SA module and the PA module share a bottleneck
+architecture. The SA receives hidden states from the FFN output as its inputs,
+adapts it with a down-projection matrix W^{down} SA ∈ R^{Dh×DSA}, which is
+followed by a non-linear activation function, and an up-projection matrix W^{up}
+_{SA} ∈ R^{DSA×Dh}:
+
+f_{SA}(h) = ReLU(hW^{down} SA )W^{up} _{SA}. (1)
+
+PA, on the other hand, receives its inputs from hidden states before the FFN
+layer with the same formulation:
+
+f_{PA}(x) = ReLU(xW^{down} PA )W^{up} _{PA}. (2)
+
+Therefore, it is able to act in parallel with the SA without interference. Note
+that the FFN hidden states h = F(x) contain the task-specific bias learned in
+its pretrained weights. Therefore, by combining SA with PA, the following
+composition of functions is achieved:
+
+f_{SAPA}(x) =ReLU(F(x)W^{down} SA )W^{up} SA +ReLU(xW^{down} PA )W^{up} _{PA}.
+(3)
+
+The final composition should provide an effective adaptation to both
+bias-influence hidden states and the original inputs before the pretrained FFN
+layer.(The PA module also acts as the low-rank reparametrization of the learned
+SA together with the frozen FFN layer to further match the intrinsic
+dimensionality of the target task.)
+
+Further, applying PEFT modules to interact both with FFNs and multi-head
+attention should have a positive impact on task performance (Mao et al., 2022;
+He et al., 2022). PT learns two prefix vectors, P_{k} and P_{v} ∈ R^{LPT×Dh},
+that are concatenated with the original multi-head attention's key and value
+vectors, which efficiently adapts the multi-head attention layer to fit the
+target task. We thus finally combine the SA and the PA (i.e. SAPA from above)
+with PT. In sum, the overview of the dimensions spanning the final configuration
+space is provided in Figure 2. The combination of the different 'configuration
+dimensions' outlined above gives rise to a total of e.g. 5,451,776 possible
+configurations with BERT_{base} and ∼ 3×10^{10} configurations with
+RoBERTa_{large} (i.e. the number of configurations is
+2^{|l|}×|D_{SA}|×|D_{PA}|×|L_{PT}|). While a large search space is crucial for
+expressiveness and to ensure that good-performing configurations are contained,
+it also increases the difficulty for search strategies to navigate the search
+space well while remaining sample- and thus computationally efficient.
+Furthermore, in the PEFT setting, we are also often interested in discovering a
+family of configurations that trade off between performance and efficiency for
+general application in various scenarios with different resource constraints,
+thus giving rise to a multi-objective optimisation problem where we
+simultaneously aim to maximise performance while minimising costs. In what
+follows, we propose a search framework that satisfies all those criteria.
+
+## 2.2 Pareto-Optimal Configuration Search
+
+The ultimate goal of AUTOPEFT is to discover promising PEFT configuration(s)
+from the expressive search space designed in §2.1, which is itself challenging.
+In this paper, we focus on an even more challenging but practical goal: instead
+of aiming to find a single, best-performing PEFT configuration, we aim to
+discover a family of Pareto-optimal PEFT configurations that trade performance
+against parameter-efficiency (or parameter cost) optimally: one of the most
+impactful use cases of PEFT is its ability to allow fine-tuning of massive
+language models even with modest computational resources, and thus we argue that
+searching Pareto-optimal configurations is key as it allows tailored user- and
+scenario-specific PEFT deployment depending on the computational budget.
+
+To this end, we adopt a Bayesian optimisation (BO) approach, illustrated in
+Figure 3. On a high level, BO consists of a surrogate model that sequentially
+approximates the objective function based on the observations so far, and an
+acquisition function, for exploitation-exploration trade-off that is optimised
+at each iteration to actively select the next configuration to evaluate. For a
+detailed overview of BO, we refer the readers to Garnett (2023) and Frazier
+(2018). We argue that BO is particularly desirable, as 1) BO is sample-efficient
+and zeroth-order. It treats the model as a black box and requires no
+differentiable objectives, allowing cost-efficient optimisation without assuming
+structures of the objectives nor the model itself, and BO also has proven
+success in NAS and automated machine learning in general (Snoek et al., 2012;
+White et al., 2021a; Ru et al., 2021; Kandasamy et al., 2018); 2) BO may
+generalise to the multi-objective setup in a search space-agnostic manner while
+the competing methods, such as supernet-based NAS methods, are typically used to
+discover a single best-performing configuration (Eriksson et al., 2021;
+Izquierdo et al., 2021); and 3) BO is more parallelisable and during search, its
+largest memory use, which is particularly important for PEFT given its main
+promise on parameter efficiency, is upper-bounded by the largest PEFT
+configuration in the search space. Competing methods such as those relying on
+over-parameterised supernets typically involve a much larger memory burden.
+
+Adapting BO to the high-dimensional and combinatorial AUTOPEFT search space is
+non-trivial. To address the challenges, we adopt the SAAS-GP (Eriksson and
+Jankowiak, 2021) model as the surrogate function: SAAS-GP places strong,
+sparsity-inducing priors to alleviate the difficulty in modelling
+high-dimensional data by assuming that despite the high nominal dimensionality,
+the effective dimensionality is much lower - this assumption is shown to be the
+case in NAS (Wan et al., 2022), and we expect similar findings in our particular
+case. For the acquisition function, we use the noisy expected hypervolume
+improvement (NEHVI) (Daulton et al., 2021) to handle the multi-objective
+setting. Lastly, we additionally use low-fidelity approximations, a popular
+low-cost performance estimation strategy in NAS (Elsken et al., 2019), to manage
+the search cost: at search-time, instead of fine-tuning each candidate PEFT
+configuration in full, we only fine-tune with a much smaller number of
+iterations (5% of full) - this is possible as we are only interested in the
+relative ranking (rather than the performance itself) of the different
+configurations during the search. Consistent with NAS literature, we also find
+the low-fidelity estimate to provide a reliable ranking, with the
+best-performing configurations in low fidelity also performing the best under
+fine-tuning with the full iterations. As we will show in §5, using the
+low-fidelity search pipeline, in combination with the strong transferability of
+the discovered configurations, AUTOPEFT only incurs an additional one-off, 1.9%
+of the total GLUE fine-tuning cost, but delivers significant performance gains.
+
+## 3 Related Work
+
+PEFT Methods in NLP. Standard PEFT methods can be divided into two main groups
+(Pfeiffer et al., 2023). 1) Some methods fine-tune a small portion of pretrained
+parameters (Zhao et al., 2020; Guo et al., 2021). For instance, Ben Zaken et al.
+(2022) propose to fine-tune the PLM's bias terms, while Sung et al. (2021) and
+Ansell et al. (2022) fine-tune sparse subnetworks withing the original PLM for a
+particular task. 2) Other methods fine-tune an additional set of parameters (Liu
+et al., 2022). Since there is no interference with the pretrained parameters,
+this class of PEFT modules, besides offering strong task performance, is
+arguably more modular; we thus focus on this class of PEFT methods in this work.
+The original adapter modules (Houlsby et al., 2019; Pfeiffer et al., 2020b) have
+a bottleneck serial architecture which can be inserted into every Transformer
+layer, see Figure 2. LoRA (Hu et al., 2022a) assumes the low-rank intrinsic
+dimensionality of the target task and performs low-rank updates (Mahabadi et
+al., 2021). Li and Liang (2021) propose the Prefix-Tuning method that appends a
+learnable vector to the attention heads at each Transformer layer. Similarly,
+prompt-tuning (Lester et al., 2021) only appends this vector to the input
+embedding. UniPELT (Mao et al., 2022) integrates multiple PEFT modules with a
+dynamic gating mechanism. He et al. (2022) provide a unified formulation of
+existing PEFT modules and propose a parallel adapter module, along with a
+combined 'Mix-and-Match Adapter (MAM)' architecture that blends parallel
+adapters and prefix-tuning. Wang et al. (2022) propose the
+mixture-of-adaptations (AdaMix) combined architecture that leverages weight
+averaging for a mixture of adapters.
+
+Optimising Parameter Efficiency in PEFT. Recent work further aims to optimise
+the parameter efficiency of existing PEFT modules while maintaining task
+performance. The standard approach is to insert (typically serial) adapters into
+all Transformer layers, which still requires a sizeable parameter budget. Rücklé
+et al. (2021) address this question by performing random dropout of adapters
+from lower-level layers, displaying only a small decrease in task performance.
+Adaptable Adapters (AA) (Moosavi et al., 2022) generalise this idea by learning
+gates that switch on or off adapters in particular Transformer layers. Neural
+Architecture Search (NAS) methods aim to automate the design of neural net
+architectures themselves, and NAS has seen great advances recently, with
+performance often surpassing human expert-designed architectures in various
+tasks (Zoph and Le, 2017; Ren et al., 2021; Elsken et al., 2019). Concerning NLP
+tasks and PEFT, Hu et al. (2022b) propose S_{3}PET, which adapts Differentiable
+Architecture Search (DARTS) (Liu et al., 2019a) to learn the positions for
+inserting the PEFT modules. Concurrent works (Valipour et al., 2022; Zhang et
+al., 2023) also approach the same problem by dynamic budget allocation
+mechanisms on a single PEFT module within a limited search space. This field
+still lacks a compact solution for automatically configuring a complex space of
+PEFT modules (Chen et al., 2023).
+
+Our method, discussed in detail in §2, offers a spectrum of advantages over
+related PEFT works. Relying on multi-objective optimisation, unlike DARTS, we
+can automatically discover a family of configurations at different parameter
+efficiency levels in a single search run, effectively balancing between task
+performance and parameter efficiency, without the need to set the 'parameter
+budget' in advance; similarly, we enable an automatic search over multiple
+constituent modules over the desirable range of parameter budget and effective
+layers, whereas previous work can only support one architecture per each search
+run. Further, previous work indicated that weight-sharing NAS such as DARTS may
+suffer with the reliability of prediction (White et al., 2021b), large memory
+usage due to supernet construction (which could be particularly problematic for
+PEFT given the emphasis on memory efficiency), and, as discussed in §2, its
+success often hinges heavily on the design of the actual search space. While
+weight-sharing NAS is often perceived to be more computationally efficient, as
+we discussed in §2.2 and will show empirically in §5, AUTOPEFT can be similar,
+if not more, efficient in discovering effective PEFT configurations even in
+terms of search costs while arguably more parameter-efficient.
+
+## 4 Experimental Setup
+
+Evaluation Data. We follow prior PEFT research and base our evaluation on the
+standard and established GLUE and SuperGLUE benchmarks. For GLUE, we include 4
+types of text classification tasks, including linguistic acceptability: CoLA;
+similarity and paraphrase: STS-B, MRPC, QQP; sentiment analysis: SST-2; natural
+language inference: RTE, QNLI, MNLI. We exclude WNLI following previous work
+(Houlsby et al., 2019; Mao et al., 2022). We also include CB, COPA, WiC, and
+BoolQ from SuperGLUE to further validate the transferability of AUTOPEFT-found
+configuration across different tasks and datasets.
+
+Baselines. We compare the performance of the AUTOPEFT-found configurations to
+the standard full model FT and each individual PEFT module (SA, PA, PT) from the
+search space used in their default setup from respective original work. We also
+compare with the LoRA module, to provide a comparison to low-rank decomposition
+methods. In order to provide comparisons with recently proposed methods that
+also integrate multiple PEFT modules (see §3), we further include the UniPELT
+and the MAM adapter in their default settings. We reproduce AdaMix for a
+comparison to a mixture of homogeneous adaptations. In ablations on insertion
+layers, we also include the Adaptable Adapter (AA) as a baseline that proposes a
+differentiable gate learning method to select the insertion layer for PEFT
+modules (i.e. serial adapters originally).
+
+Implementation Details. Following previous work on the GLUE benchmark, we report
+the best GLUE dev set performance (Ben Zaken et al., 2022) and use 20 training
+epochs with an early stopping scheme of 10 epochs for all per-task experiments.
+We use AdapterHub (Pfeiffer et al., 2020a) as the codebase and conduct extensive
+experiments with the uncased BERT_{base} (Devlin et al., 2019) as the main
+backbone model. We report main experiments with the mean and standard deviation
+over 5 different random seeds. Following Pfeiffer et al. (2020b), we use a
+recommended learning rate of 10^{−4} for all PEFT experiments. We use the
+learning rate of 2 × 10^{−5} for full model FT according to Mao et al. (2022).
+We use the batch size of 32 and 16 for all BERT and RoBERTa experiments,
+respectively. The optimiser settings for each PEFT module follow the default
+settings in AdapterHub (Pfeiffer et al., 2020a). We implement the BO search
+algorithm in BoTorch (Balandat et al., 2020) and use the recommended settings
+from Eriksson and Jankowiak (2021) for the surrogate. For acquisition function
+optimisation, we use a local search method similar to previous literature with a
+similar setup (Wan et al., 2021; Eriksson et al., 2021): at each search
+iteration (after the initial randomly sampled points), we collect the
+Pareto-optimal architectures up to this point. From this collection of
+Pareto-optimal architectures, we perform a local search by evaluating the
+acquisition function values of their neighbours, and move the current point to a
+neighbour with a higher acquisition function value and this process is repeated
+until convergence. Due to the relatively noisy nature of the problem, we use 100
+random initialisation points for all experiments followed by 100 BO iterations.
+We further show results using RoBERTa_{large} (Liu et al., 2019b) in Table 4,
+which shows findings that are consistent with the BERT_{base}. In experiments
+with RoBERTa_{large} as the underlying PLM, we report the RTE results with a
+learning rate of 2 × 10^{−5} for_{ AUTO}PEFT^{MRPC} and_{ AUTO}PEFT^{CoLA};
+10^{−4} for AUTOPEFT^{RTE}.
+
+## 5 Results and Discussion
+
+Discussion of Main Results. The main results are summarised in Table 1 where we
+evaluate the AUTOPEFT-found configurations searched from RTE, the most
+low-resource and challenging task, on the full GLUE suite. For simplicity, we
+report a single configuration that leads to the highest task performance in a
+predefined, user-specified parameter budget from the discovered Pareto-optimal
+set in Table 1, whereas the full Pareto-optimal set is evaluated in Figure 4.
+First, using only 0.76% of parameters, AUTOPEFT^{RTE} outperforms all the PEFT
+baselines (more than 2% on RTE). The AUTOPEFT-found configuration also
+outperforms the full-model FT baseline on the RTE task by more than 1%. These
+results indicate the effectiveness of the AUTOPEFT framework in optimising both
+task performance and parameter efficiency. Transferring the RTE-based
+configurations to other tasks, we find that strong performance is maintained
+across the target tasks, with more benefits on the medium-resource tasks (MRPC,
+STS-B, CoLA), but the configuration remains competitive also for higher-resource
+tasks (e.g. QQP, MNLI).
+
+Table 2 specifies the composition of the found configuration, indicating the
+exact task-active layers while allocating more parameter budget to the efficient
+and effective PA module. On average, the_{ AUTO}PEFT^{RTE} configuration shows a
+comparable fine-tuning performance (83.17), to FFT (83.15), by only updating
+0.76% of parameters. With strong transferability across similar tasks, AUTOPEFT
+provides distinct advantages in parameter efficiency; the search algorithm
+itself coupled with transfer becomes more sample-efficient within limited
+training resources.
+
+Scalability to More Tasks and Efficiency. We next 'stress-test' the ability of
+AUTOPEFT-found configuration in a more challenging scenario, carrying out
+experiments on a completely new set of dissimilar tasks. Table 3 reports the
+results of transferring AUTOPEFT^{RTE} from Table 1 to four SuperGLUE tasks. In
+terms of parameter efficiency, we observe consistent patterns as in Table 1
+before, where our plug-and-play PEFT configuration outperforms existing PEFT
+baselines by a substantial margin (2%) on average while being comparable to the
+costly full-model FT.(With the^{ AUTO}PEFT-found off-the-shelf configuration,)
+In terms of search cost, we recall that through the use of low-fidelity proxy
+and the strong transferability,_{ AUTO}PEFT^{RTE} in Table 1 only requires an
+additional, one-off 1.9% in terms of training time (or equivalently the number
+of fine-tuning steps) of that of single-seed training of the GLUE training sets.
+Furthermore, Figure 5 demonstrates the robustness of our framework to the choice
+of the source task to search on. Therefore, our framework is task-agnostic with
+a cheap one-time cost but yields 'permanent' improvement towards all efficiency
+metrics for PEFT: space, time, and memory.
+
+Per-Task Configuration Search. We further conduct full-resource per-task
+AUTOPEFT searches. While naturally more expensive, we argue this setup is useful
+if, for example, one is interested in finding absolutely the best configurations
+for that particular task and where search cost is less of a concern. Due to
+computational constraints, we search per-task on RTE, MPRC, STS-B and CoLA then
+port the small set of best configurations to the remaining higher-resource tasks
+(SST-2, QNLI, QQP, MNLI). We observe consistent gains in all tasks we search on
+over the best-performing PEFT baselines, e.g. MRPC (87.16% (best baseline) to
+87.45% (ours)) and CoLA (60.13% to 60.92%), and also the transferred
+configuration _{AUTO}PEFT^{RTE} in Table 1. One interpretation is that while
+configurations are highly transferable, the optimal configurations may
+nonetheless differ slightly across tasks such that while transferred AUTOPEFT
+configurations (e.g. the one reported in Table 1) perform well, searching
+per-task per-this requires no additional search cost and enables a more
+efficient and effective tuning approach for new tasks.
+
+forms the best. Crucially, we also find per-task AUTOPEFT in this setup to even
+outperform FFT, despite only using 1.4% of all parameters, except for the
+high-resources task where we mostly perform on par; this is consistent with our
+observations that similar to the baselines, due to the richness of training
+resources, the performance may be mostly saturated and PEFT methods often
+achieve on-par performance to FFT at most.
+
+Analysing the 'Behaviour' of Bayesian Optimisation. Figure 6 shows the
+distribution of AUTOPEFT-found configurations when we conduct its search
+experiment on RTE. Recalling that the search strategy (§2.2) starts with the
+random initialisation, we compare the behaviours of the random explorations and
+the BO-suggested configurations: whereas the random search baseline is purely
+exploratory and discovers less parameter-efficient configurations, BO succeeds
+in discovering configurations towards the regions with improved parameter
+efficiency. BO eventually discovers a rich family of PEFT configurations across
+a wide range of parameters, whereas previous approaches typically fail to
+explore the entire Pareto front. This is a critical strength motivating our BO
+search strategy.
+
+Ablation of the Configuration Space. To provide a finer-grained analysis of
+factors that bring positive impact to AUTOPEFT, we ablate the AUTOPEFT search
+space from the full configuration space: 1) to the basic enumeration of the
+bottleneck size D_{SA} of the SA only (the SA space). We then include the
+Transformer layer and the SA size together into the search space (the SA-Layer
+space) to validate the usefulness of using layer selection as one configuration
+dimension. We can then also expand the search space by adding another module
+(e.g. PA yields the SA-PA-Layer space). Figure 7 plots the performance over the
+ablated configuration spaces and over different parameter budgets. Several key
+findings emerge. First, combining multiple single PEFT modules has a positive
+impact on AUTOPEFT in general (c.f. full AUTOPEFT vs. SA-PA-Layer vs. SA-Layer).
+Relying on layer selection also brings benefits (c.f. SA vs. SA-Layer). The
+comparison also indicates that leaving out some Transformer layers while
+increasing the capacity of the PEFT module is a straightforward method to
+improve the parameter efficiency and task performance of the PEFT module within
+a fixed parameter budget. The ablation results also demonstrate that AUTOPEFT is
+search space-agnostic, capable of effectively operating over configuration
+spaces of different granularity.
+
+Layer Selection. The ability to disable some PEFT layers altogether is a key
+novelty of the AUTOPEFT search space, and to further compare different layer
+selection approaches, we conduct a controlled experiment with the SA module on
+BERT_{large} (24 Transformer layers) under a predefined parameter budget. In
+Table 5, we compare against AdapterDrop, which simply drops the adapters for the
+first 11 layers while doubling their bottleneck sizes, and, within the same
+architecture, we also include the Adaptable Adapter with selected layers from
+switch learning (3 and 10 layers from the first 12 and the other 12 layers,
+respectively). We show that AUTOPEFT outperforms existing layer selection
+baselines activating fewer PEFT layers, leading to better parameter efficiency
+(12.5% fewer parameters in relative terms) yet achieving better performance. It
+indicates that selecting the best insertion layer is non-trivial, and AUTOPEFT
+can efficiently learn the correlation between layers.
+
+## 6 Conclusion
+
+We proposed AUTOPEFT, a novel search framework for automatically configuring
+parameter-efficient fine-tuning (PEFT) modules of pretrained language models.
+AUTOPEFT features both a large and expressive, newly designed configuration
+search space and an effective search method featuring Bayesian optimisation that
+discovers a Pareto-optimal set of novel PEFT configurations with promising
+performance-efficiency trade-offs. Empirically, we demonstrated that
+AUTOPEFT-discovered configurations transfer strongly across different GLUE and
+SuperGLUE tasks, outperforming a variety of strong PEFT baselines and being
+competitive to full model fine-tuning.
+
+## Limitations and Future Work
+
+AUTOPEFT search inevitably incurs a search cost since it requires iterative
+optimisation at search time. However, we mitigate this by 1) using a
+low-fidelity proxy of 1-epoch training, and 2) leveraging strong transferability
+by generalising from low-resource and thus quick-to-train tasks. While the
+search itself can be seen as a one-time cost yielding a permanent
+well-performing and shareable configuration for particular tasks, we plan to
+delve deeper into further optimising the search cost in future work.
+Furthermore, while we conduct extensive experiments on the search space that
+contains three existing PEFT modules as building blocks, novel PEFT modules may
+emerge. However, AUTOPEFT framework is general where we may easily integrate
+these forthcoming new modules. We defer thorough investigations to future work.
+
+## Acknowledgements
+
+Xingchen Wan is supported by the Clarendon Scholarship at University of Oxford.
+The work has been supported in part by a personal Royal Society University
+Research Fellowship (no 221137; 2022-) awarded to Ivan Vuli´c.
+
+## References
+
+Alan Ansell, Edoardo Ponti, Anna Korhonen, and Ivan Vuli´c. 2022. Composable
+sparse fine-tuning for cross-lingual transfer. In Proceedings of the 60th Annual
+Meeting of the Association for Computational Linguistics (Volume 1: Long
+Papers), pages 1778-1796, Dublin, Ireland. Association for Computational
+Linguistics.
+
+Maximilian Balandat, Brian Karrer, Daniel Jiang, Samuel Daulton, Ben Letham,
+Andrew G Wilson, and Eytan Bakshy. 2020. Botorch: A framework for efficient
+monte-carlo bayesian optimization. Advances in neural information processing
+systems, 33:21524-21538.
+
+Elad Ben Zaken, Yoav Goldberg, and Shauli Ravfogel. 2022. BitFit: Simple
+parameter-efficient fine-tuning for transformer-based masked language-models. In
+Proceedings of the 60th Annual Meeting of the Association for Computational
+Linguistics (Volume 2: Short Papers), pages 1-9, Dublin, Ireland. Association
+for Computational Linguistics.
+
+Tom B. Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared Kaplan, Prafulla
+Dhariwal, Arvind Neelakantan, Pranav Shyam, Girish Sastry, Amanda Askell,
+Sandhini Agarwal, Ariel Herbert-Voss, Gretchen Krueger, Tom Henighan, Rewon
+Child, Aditya Ramesh, Daniel M. Ziegler, Jeffrey Wu, Clemens Winter, Christopher
+Hesse, Mark Chen, Eric Sigler, Mateusz Litwin, Scott Gray, Benjamin Chess, Jack
+Clark, Christopher Berner, Sam McCandlish, Alec Rad-ford, Ilya Sutskever, and
+Dario Amodei. 2020. Language models are few-shot learners. In Advances in Neural
+Information Processing Systems 33: Annual Conference on Neural Information
+Processing Systems 2020, NeurIPS 2020, December 6-12, 2020, virtual.
+
+Guanzheng Chen, Fangyu Liu, Zaiqiao Meng, and Shangsong Liang. 2022a. Revisiting
+parameter-efficient tuning: Are we really there yet? In Proceedings of the 2022
+Conference on Empirical Methods in Natural Language Processing, pages 2612-2626,
+Abu Dhabi, United Arab Emirates. Association for Computational Linguistics.
+
+Jiaao Chen, Aston Zhang, Xingjian Shi, Mu Li, Alex Smola, and Diyi Yang. 2023.
+Parameter-efficient fine-tuning design spaces. In The Eleventh International
+Conference on Learning Representations.
+
+Shoufa Chen, Chongjian Ge, Zhan Tong, Jiangliu Wang, Yibing Song, Jue Wang, and
+Ping Luo. 2022b. Adaptformer: Adapting vision transformers for scalable visual
+recognition. In Advances in Neural Information Processing Systems.
+
+Samuel Daulton, Maximilian Balandat, and Eytan Bakshy. 2021. Parallel bayesian
+optimization of multiple noisy objectives with expected hypervolume improvement.
+In Advances in Neural Information Processing Systems 34: Annual Conference on
+Neural Information Processing Systems 2021, NeurIPS 2021, December 6-14, 2021,
+virtual, pages 2187-2200.
+
+Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova. 2019. BERT:
+Pre-training of deep bidirectional transformers for language understanding. In
+Proceedings of the 2019 Conference of the North American Chapter of the
+Association for Computational Linguistics: Human Language Technologies, Volume 1
+(Long and Short Papers), pages 4171-4186, Minneapolis, Minnesota. Association
+for Computational Linguistics.
+
+Xuanyi Dong and Yi Yang. 2020. Nas-bench-201: Extending the scope of
+reproducible neural architecture search. In 8th International Conference on
+Learning Representations, ICLR 2020, Addis Ababa, Ethiopia, April 26-30, 2020.
+
+Thomas Elsken, Jan Hendrik Metzen, and Frank Hutter. 2019. Neural architecture
+search: A survey. The Journal of Machine Learning Research, 20(1):1997-2017.
+
+David Eriksson, Pierce I-Jen Chuang, Samuel Daulton, Peng Xia, Akshat
+Shrivastava, Arun Babu, Shicong Zhao, Ahmed A Aly, Ganesh Venkatesh, and
+Maximilian Balandat. 2021. Latency-aware neural architecture search with
+multi-objective bayesian optimization. In 8th ICML Workshop on Automated Machine
+Learning (AutoML).
+
+David Eriksson and Martin Jankowiak. 2021. High-dimensional bayesian
+optimization with sparse axis-aligned subspaces. In Uncertainty in Artificial
+Intelligence, pages 493-503. PMLR.
+
+Peter I. Frazier. 2018. A tutorial on bayesian optimization. CoRR,
+abs/1807.02811.
+
+Roman Garnett. 2023. Bayesian Optimization. Cambridge University Press.
+
+Demi Guo, Alexander Rush, and Yoon Kim. 2021.
+
+Parameter-efficient transfer learning with diff pruning. In Proceedings of the
+59th Annual Meeting of the Association for Computational Linguistics and the
+11th International Joint Conference on Natural Language Processing (Volume 1:
+Long Papers), pages 4884-4896, Online. Association for Computational
+Linguistics.
+
+Junxian He, Chunting Zhou, Xuezhe Ma, Taylor Berg-Kirkpatrick, and Graham
+Neubig. 2022. Towards a unified view of parameter-efficient transfer learning.
+In The Tenth International Conference on Learning Representations, ICLR 2022,
+Virtual Event, April 25-29, 2022.
+
+Neil Houlsby, Andrei Giurgiu, Stanislaw Jastrzebski, Bruna Morrone, Quentin de
+Laroussilhe, Andrea Gesmundo, Mona Attariyan, and Sylvain Gelly. 2019.
+Parameter-efficient transfer learning for NLP. In Proceedings of the 36th
+International Conference on Machine Learning, ICML 2019, 9-15 June 2019, Long
+Beach, California, USA, pages 2790-2799.
+
+Edward J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean
+Wang, Lu Wang, and Weizhu Chen. 2022a. Lora: Low-rank adaptation of large
+language models. In The Tenth International Conference on Learning
+Representations, ICLR 2022, Virtual Event, April 25-29, 2022.
+
+Shengding Hu, Zhen Zhang, Ning Ding, Yadao Wang, Yasheng Wang, Zhiyuan Liu, and
+
+Maosong Sun. 2022b. Sparse structure search for delta tuning. In Advances in
+Neural Information Processing Systems.
+
+Sergio Izquierdo, Julia Guerrero-Viu, Sven Hauns, Guilherme Miotto, Simon
+Schrodi, André Biedenkapp, Thomas Elsken, Difan Deng, Marius Lindauer, and Frank
+Hutter. 2021. Bag of baselines for multi-objective joint neural architecture
+search and hyperparameter optimization. In 8th ICML Workshop on Automated
+Machine Learning (AutoML).
+
+Kirthevasan Kandasamy, Willie Neiswanger, Jeff Schneider, Barnabás Póczos, and
+Eric P. Xing. 2018. Neural architecture search with bayesian optimisation and
+optimal transport. In Advances in Neural Information Processing Systems 31:
+Annual Conference on Neural Information Processing Systems 2018, NeurIPS 2018,
+December 3-8, 2018, Montréal, Canada, pages 2020-2029.
+
+Brian Lester, Rami Al-Rfou, and Noah Constant. 2021. The power of scale for
+parameter-efficient prompt tuning. In Proceedings of the 2021 Conference on
+Empirical Methods in Natural Language Processing, pages 3045-3059, Online and
+Punta Cana, Dominican Republic. Association for Computational Linguistics.
+
+Liam Li and Ameet Talwalkar. 2019. Random search and reproducibility for neural
+architecture search. In Proceedings of the Thirty-Fifth Conference on
+Uncertainty in Artificial Intelligence, UAI 2019, Tel Aviv, Israel, July 22-25,
+2019, pages 367-377.
+
+Xiang Lisa Li and Percy Liang. 2021. Prefix-tuning: Optimizing continuous
+prompts for generation. In Proceedings of the 59th Annual Meeting of the
+Association for Computational Linguistics and the 11th International Joint
+Conference on Natural Language Processing (Volume 1: Long Papers), pages
+4582-4597, Online. Association for Computational Linguistics.
+
+Hanxiao Liu, Karen Simonyan, and Yiming Yang. 2019a. DARTS: differentiable
+architecture search. In 7th International Conference on Learning
+Representations, ICLR 2019, New Or-leans, LA, USA, May 6-9, 2019.
+
+Haokun Liu, Derek Tam, Muqeeth Mohammed, Jay Mohta, Tenghao Huang, Mohit Bansal,
+and Colin Raffel. 2022. Few-shot parameter-efficient fine-tuning is better and
+cheaper than in-context learning. In Advances in Neural Information Processing
+Systems.
+
+Yinhan Liu, Myle Ott, Naman Goyal, Jingfei Du, Mandar Joshi, Danqi Chen, Omer
+Levy, Mike Lewis, Luke Zettlemoyer, and Veselin Stoyanov. 2019b. Roberta: A
+robustly optimized BERT pretraining approach. CoRR, abs/1907.11692.
+
+Rabeeh Karimi Mahabadi, James Henderson, and Sebastian Ruder. 2021. Compacter:
+Efficient low-rank hypercomplex adapter layers. In Advances in Neural
+Information Processing Systems 34: Annual Conference on Neural Information
+Processing Systems 2021, NeurIPS 2021, December 6-14, 2021, virtual, pages
+1022-1035.
+
+Yuning Mao, Lambert Mathias, Rui Hou, Amjad Almahairi, Hao Ma, Jiawei Han, Scott
+Yih, and Madian Khabsa. 2022. UniPELT: A unified framework for
+parameter-efficient language model tuning. In Proceedings of the 60th Annual
+Meeting of the Association for Computational Linguistics (Volume 1: Long
+Papers), pages 6253-6264, Dublin, Ireland. Association for Computational
+Linguistics.
+
+Nafise Moosavi, Quentin Delfosse, Kristian Kersting, and Iryna Gurevych. 2022.
+Adaptable adapters. In Proceedings of the 2022 Conference of the North American
+Chapter of the Association for Computational Linguistics: Human Language
+Technologies, pages 3742-3753, Seattle, United States. Association for
+Computational Linguistics.
+
+Jonas Pfeiffer, Naman Goyal, Xi Lin, Xian Li, James Cross, Sebastian Riedel, and
+Mikel Artetxe. 2022. Lifting the curse of multilinguality by pre-training
+modular transformers. In Proceedings of the 2022 Conference of the North
+American Chapter of the Association for Computational Linguistics: Human
+Language Technologies, pages 3479-3495, Seattle, United States. Association for
+Computational Linguistics.
+
+Jonas Pfeiffer, Andreas Rücklé, Clifton Poth, Aishwarya Kamath, Ivan Vuli´c,
+Sebastian Ruder, Kyunghyun Cho, and Iryna Gurevych. 2020a. AdapterHub: A
+framework for adapting transformers. In Proceedings of the 2020 Conference on
+Empirical Methods in Natural Language Processing: System Demonstrations, pages
+46-54, Online. Association for Computational Linguistics.
+
+Jonas Pfeiffer, Sebastian Ruder, Ivan Vuli´c, and Edoardo Maria Ponti. 2023.
+Modular deep learning. CoRR, abs/2302.11529.
+
+Jonas Pfeiffer, Ivan Vuli´c, Iryna Gurevych, and Sebastian Ruder. 2020b. MAD-X:
+An Adapter-Based Framework for Multi-Task Cross-Lingual Transfer. In Proceedings
+of the 2020 Conference on Empirical Methods in Natural Language Processing
+(EMNLP), pages 7654-7673, Online. Association for Computational Linguistics.
+
+Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan Narang, Michael
+Matena, Yanqi Zhou, Wei Li, and Peter J. Liu. 2020. Exploring the limits of
+transfer learning with a unified text-to-text transformer. J. Mach. Learn. Res.,
+21:140:1-140:67.
+
+Pengzhen Ren, Yun Xiao, Xiaojun Chang, Po-Yao Huang, Zhihui Li, Xiaojiang Chen,
+and Xin Wang. 2021. A comprehensive survey of neural architecture search:
+Challenges and solutions. ACM Computing Surveys (CSUR), 54(4):1-34.
+
+Bin Xin Ru, Xingchen Wan, Xiaowen Dong, and Michael A. Osborne. 2021.
+Interpretable neural architecture search via bayesian optimisation with
+weisfeiler-lehman kernels. In 9th International Conference on Learning
+Representations, ICLR 2021, Virtual Event, Austria, May 3-7, 2021.
+
+Robin Ru, Pedro M. Esperança, and Fabio Maria Carlucci. 2020. Neural
+architecture generator optimization. In Advances in Neural Information
+Processing Systems 33: Annual Conference on Neural Information Processing
+Systems 2020, NeurIPS 2020, December 6-12, 2020, virtual.
+
+Andreas Rücklé, Gregor Geigle, Max Glockner, Tilman Beck, Jonas Pfeiffer, Nils
+Reimers, and Iryna Gurevych. 2021. AdapterDrop: On the efficiency of adapters in
+transformers. In Proceedings of the 2021 Conference on Empirical Methods in
+Natural Language Processing, pages 7930-7946, Online and Punta Cana, Dominican
+Republic. Association for Computational Linguistics.
+
+Victor Sanh, Albert Webson, Colin Raffel, Stephen Bach, Lintang Sutawika, Zaid
+Alyafeai, Antoine Chaffin, Arnaud Stiegler, Arun Raja, Manan Dey, M Saiful Bari,
+Canwen Xu, Urmish Thakker, Shanya Sharma Sharma, Eliza Szczechla, Taewoon Kim,
+Gunjan Chhablani, Nihal V. Nayak, Debajyoti Datta, Jonathan Chang, Mike
+Tian-Jian Jiang, Han Wang, Matteo Manica, Sheng Shen, Zheng Xin Yong, Harshit
+Pandey, Rachel Bawden, Thomas Wang, Trishala Neeraj, Jos Rozen, Abheesht Sharma,
+Andrea Santilli, Thibault Févry, Jason Alan Fries, Ryan Teehan, Teven Le Scao,
+Stella Biderman, Leo Gao, Thomas Wolf, and Alexander M. Rush. 2022. Multitask
+prompted training enables zero-shot task generalization. In The Tenth
+International Conference on Learning Representations, ICLR 2022, Virtual Event,
+April 25-29, 2022.
+
+Jasper Snoek, Hugo Larochelle, and Ryan P. Adams. 2012. Practical bayesian
+optimization of machine learning algorithms. In Advances in Neural Information
+Processing Systems 25: 26th Annual Conference on Neural Information Processing
+Systems 2012. Proceedings of a meeting held December 3-6, 2012, Lake Tahoe,
+Nevada, United States, pages 2960-2968.
+
+Yi-Lin Sung, Varun Nair, and Colin Raffel. 2021.
+
+Training neural networks with fixed sparse masks. In Advances in Neural
+Information Processing Systems 34: Annual Conference on Neural Information
+Processing Systems 2021, NeurIPS 2021, December 6-14, 2021, virtual, pages
+24193-24205.
+
+Ian Tenney, Dipanjan Das, and Ellie Pavlick. 2019.
+
+BERT rediscovers the classical NLP pipeline. In Proceedings of the 57th Annual
+Meeting of the Association for Computational Linguistics, pages 4593-4601,
+Florence, Italy. Association for Computational Linguistics.
+
+Mojtaba Valipour, Mehdi Rezagholizadeh, Ivan Kobyzev, and Ali Ghodsi. 2022.
+Dylora: Parameter efficient tuning of pre-trained models using dynamic
+search-free low-rank adaptation. CoRR, abs/2210.07558.
+
+Ivan Vuli´c, Edoardo Maria Ponti, Robert Litschko, Goran Glavaš, and Anna
+Korhonen. 2020. Probing pretrained language models for lexical semantics. In
+Proceedings of the 2020 Conference on Empirical Methods in Natural Language
+
+Processing (EMNLP), pages 7222-7240, Online. Association for Computational
+Linguistics.
+
+Xingchen Wan, Vu Nguyen, Huong Ha, Binxin Ru, Cong Lu, and Michael A Osborne.
+2021. Think global and act local: Bayesian optimisation over high-dimensional
+categorical and mixed search spaces. In International Conference on Machine
+Learning, pages 10663-10674. PMLR.
+
+Xingchen Wan, Binxin Ru, Pedro M. Esperança, and Zhenguo Li. 2022. On redundancy
+and diversity in cell-based neural architecture search. In The Tenth
+International Conference on Learning Representations, ICLR 2022, Virtual Event,
+April 25-29, 2022. OpenReview.net.
+
+Alex Wang, Yada Pruksachatkun, Nikita Nangia, Amanpreet Singh, Julian Michael,
+Felix Hill, Omer Levy, and Samuel R. Bowman. 2019. Superglue: A stickier
+benchmark for general-purpose language understanding systems. In Advances in
+Neural Information Processing Systems 32: Annual Conference on Neural
+Information Processing Systems 2019, NeurIPS 2019, December 8-14, 2019,
+Vancouver, BC, Canada, pages 3261-3275.
+
+Alex Wang, Amanpreet Singh, Julian Michael, Felix Hill, Omer Levy, and Samuel
+Bowman. 2018. GLUE: A multi-task benchmark and analysis platform for natural
+language understanding. In Proceedings of the 2018 EMNLP Workshop BlackboxNLP:
+Analyzing and Interpreting Neural Networks for NLP, pages 353-355, Brussels,
+Belgium. Association for Computational Linguistics.
+
+Yaqing Wang, Sahaj Agarwal, Subhabrata Mukherjee, Xiaodong Liu, Jing Gao, Ahmed
+Hassan Awadallah, and Jianfeng Gao. 2022. Adamix: Mixture-of-adaptations for
+parameter-efficient model tuning. In Proceedings of the 2022 Conference on
+Empirical Methods in Natural Language Processing, pages 5744-5760, Abu Dhabi,
+United Arab Emirates. Association for Computational Linguistics.
+
+Colin White, Willie Neiswanger, and Yash Savani. 2021a. BANANAS: bayesian
+optimization with neural architectures for neural architecture search. In
+Thirty-Fifth AAAI Conference on Artificial Intelligence, AAAI 2021, Thirty-Third
+Conference on Innovative Applications of Artificial
+
+Intelligence, IAAI 2021, The Eleventh Symposium on Educational Advances in
+Artificial Intelligence, EAAI 2021, Virtual Event, February 2-9, 2021, pages
+10293-10301.
+
+Colin White, Arber Zela, Robin Ru, Yang Liu, and Frank Hutter. 2021b. How
+powerful are performance predictors in neural architecture search? In Advances
+in Neural Information Processing Systems 34: Annual Conference on Neural
+Information Processing Systems 2021, NeurIPS 2021, December 6-14, 2021, virtual,
+pages 28454-28469.
+
+Saining Xie, Alexander Kirillov, Ross Girshick, and Kaiming He. 2019. Exploring
+randomly wired neural networks for image recognition. In Proceedings of the
+IEEE/CVF International Conference on Computer Vision, pages 1284-1293.
+
+Antoine Yang, Pedro M. Esperança, and Fabio Maria Carlucci. 2020. NAS evaluation
+is frustratingly hard. In 8th International Conference on Learning
+Representations, ICLR 2020, Addis Ababa, Ethiopia, April 26-30, 2020.
+
+Qingru Zhang, Minshuo Chen, Alexander Bukharin, Pengcheng He, Yu Cheng, Weizhu
+Chen, and Tuo Zhao. 2023. Adaptive budget allocation for parameter-efficient
+fine-tuning. In The Eleventh International Conference on Learning
+Representations.
+
+Mengjie Zhao, Tao Lin, Fei Mi, Martin Jaggi, and Hinrich Schütze. 2020. Masking
+as an efficient alternative to finetuning for pretrained language models. In
+Proceedings of the 2020 Conference on Empirical Methods in Natural Language
+Processing (EMNLP), pages 2226-2241, Online. Association for Computational
+Linguistics.
+
+Barret Zoph and Quoc V. Le. 2017. Neural architecture search with reinforcement
+learning. In 5th International Conference on Learning Representations, ICLR
+2017, Toulon, France, April 24-26, 2017, Conference Track Proceedings.
+
+## A Supplemental Material: Technical Details
+
+PEFT Modules: Architectures and Setup. We implement the serial adapter
+architecture (SA) following the setup of Pfeiffer et al. (2020b). The parallel
+adapter (PA) architecture is the same as the one proposed by He et al. (2022),
+where a scaling factor of 4 is implemented in all PA experiments. The
+prefix-tuning (PT) architecture has an intermediate MLP with a bottleneck size
+of 800, which is trained the same way as in the original wor (Li and Liang,
+2021). We also use the default setting for LoRA with a scaling of 8 and a rank
+of 8. We reproduce the experimental results with the reported setup of the MAM
+adapter He et al. (2022) and UniPELT (Mao et al., 2022). We reproduce the AdaMix
+results with the reported hyperparameter setup from the original work (Wang et
+al., 2022) in 20 epochs. In the experiments of Figure 4, we control the
+bottleneck size D_{SA} and D_{PA} for SA and PA baselines, respectively, while
+keeping other setups unchanged to discover their performance across the
+parameter budget. Similarly, we control the prefix length L_{PT} for
+prefix-tuning and the rank r of LoRA without changing other setups.
+
+AUTOPEFT Search Setup. We implement the BO algorithm in BoTorch (Balandat et
+al., 2020). We use the Matern 5/2 kernel as the covariance function, and for the
+Monte Carlo sampling settings of SAAS-BO (Eriksson and Jankowiak, 2021), we use
+a warm-up step of 256, the number of samples to retain as 128, and thinning as
+16. For the optimisation of the acquisition function, to adapt to the discrete
+setup, we use a local search method similar to previous literature involving
+similar setup (Wan et al., 2021; Eriksson et al., 2021): at each search
+iteration (after the initial randomly sampled points), we collect the
+Pareto-optimal architectures up to this point. From this collection of
+Pareto-optimal architectures, we perform a local search by evaluating the
+acquisition function values of their neighbours, and move the current point to a
+neighbour with a higher acquisition function value and this process is repeated
+until convergence (which is a local minimum in terms of acquisition function),
+or 100 evaluations in acquisition function value are reached. At each search
+iteration, we restart this process 10 times and select the top candidate for the
+query (in this case, fine-tuning) for the next iteration. For all BO
+experiments, we use 200 total evaluations; given the noisy nature of the
+problem, we use a relatively large number of random initialisation points (100)
+to ensure that the search results are not overly sensitive to initialisation. We
+use the same hyperparameter settings as described for all experiments conducted
+in this paper.
+
+Calculation of Fine-tuned Parameters. The uncased BERT_{base} model (109M) has
+12 Transformer layers with a hidden dimension size of 768. The uncased
+BERT_{large} model (335M) and RoBERTa_{large} (355M) both have 24 layers with a
+hidden dimension size of 1, 024. For both SA and PA, their fine-tuned parameters
+are computed by 2 × D_{adapter} × D_{h} × |l|, where D_{h} represents the
+corresponding hidden dimension of the selected model, and |l| refers to the
+total selected number of insertion layers. Similarly, we calculate the
+fine-tuned parameters of PT by 2 × L_{PT} × D_{h} × |l|. Thus, the number of
+fine-tuned parameters of the AUTOPEFT-found configurations is a summation of
+individual PEFT modules' parameters. We report the default fine-tuned parameters
+for the remaining PEFT modules as defined in their original papers.
+
+## B Search Space and Discovered Architectures
+
+We analyse the learned configurations in terms of the selected layers over
+different parameter scales in Table 2. They show a common trend in selecting the
+higher Transformer layers to insert the PEFT modules, which coincides with
+previous findings that the higher layer contains richer task-specific
+representations, and introducing PEFT modules to these layers is more efficient
+than other layers. With the AUTOPEFT-found configurations reported in Table 2,
+we hope future PEFT research and applications can benefit from the architecture
+design similar to_{ AUTO}PEFT^{RTE} that we find the most transferable across
+tasks.
+
