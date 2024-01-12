@@ -3,7 +3,7 @@ import os
 import re
 
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
+sys.path.insert(0,os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
 from tokengenerators import (DSItem, TextDS2TokensGenerator)
 from typing import cast
@@ -41,8 +41,8 @@ def test_calculate_optimal_step_size_many_chunks_with_waste() -> None:
 def test_calculate_optimal_step_size_many_chunks_with_waste2() -> None:
     oss = TextDS2TokensGenerator.calculate_optimal_step_size(num_tokens = 1022, chunk_len=50, min_stride=10, max_waste=9)
     slices = TextDS2TokensGenerator.calculate_slices(num_tokens = 1022, chunk_len= 50, optimal_step_size=oss)
-    print(f" step_size = {oss}")
-    print(f"slices: {slices.__repr__()}")
+    #print(f" step_size = {oss}")
+    #print(f"slices: {slices.__repr__()}")
     assert oss < 39.0
     assert oss > 38.0
 
@@ -50,8 +50,8 @@ def test_calculate_optimal_step_realistic_scenario() -> None:
     num_tokens, chunk_len, min_stride, max_waste = 12121, 4096, 64, 64
     oss = TextDS2TokensGenerator.calculate_optimal_step_size(num_tokens = num_tokens, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste)
     slices = TextDS2TokensGenerator.calculate_slices(num_tokens = num_tokens, chunk_len= chunk_len, optimal_step_size=oss)
-    print(f" step_size = {oss}")
-    print(f"slices: {slices.__repr__()}")
+    #print(f" step_size = {oss}")
+    #print(f"slices: {slices.__repr__()}")
     assert oss > 4012
     assert oss <  4013
 
@@ -67,6 +67,7 @@ def test_calculate_slices_minimal_chunks_with_waste() -> None:
 
 def test_calculate_slices_realistic_scenario() -> None:
     assert TextDS2TokensGenerator.calculate_slices(num_tokens = 12121, chunk_len= 4096, optimal_step_size=4012.5) == [slice(0, 4096), slice(4013, 8109), slice(8025, 12121)]
+
 
 
 # If the huge huggingface models are not available locally, use this sort of mock of a tokenizer
@@ -123,6 +124,7 @@ tokenizer: PreTrainedTokenizerFast= \
 
 
 
+
 # yield_tokenized_chunks_from_text_item
 def test_yield_tokenized_chunks_from_text_item() -> None:
     tokenizer.pad_token = tokenizer.eos_token
@@ -176,7 +178,7 @@ def test_text_ds_2_tokens_generator_one_doc() -> None:
 
     chunks:list[DSItem] = [cast(DSItem,item) for item in iterable_ds]
 
-    print(chunks.__repr__())
+    #print(chunks.__repr__())
     assert len(chunks[0]["input_ids"]) == chunk_len
     for chunk in chunks:
         assert len(chunk["input_ids"]) == chunk_len
@@ -214,7 +216,7 @@ def test_text_ds_2_tokens_generator_multi_doc() -> None:
     iterable_ds:datasets.IterableDataset = datasets.IterableDataset.from_generator(generator)
 
     chunks:list[DSItem] = [cast(DSItem,item) for item in iterable_ds]
-    print(chunks.__repr__())
+    #print(chunks.__repr__())
     assert len(chunks[0]["input_ids"]) == chunk_len
     for chunk in chunks:
         assert len(chunk["input_ids"]) == chunk_len
@@ -234,4 +236,24 @@ def test_text_ds_2_tokens_generator_multi_doc() -> None:
         assert position_of_second_text_in_long_text > max_waste 
         assert position_of_second_text_in_long_text < len(texts[0])-chunk_len
 
+
+
+def test_text_ds_2_tokens_generator_exhaustion() -> None:
+    from datasets import Dataset
+    from s3datasets import S3TextDataset
+    ds: Dataset = S3TextDataset.from_bucket("vast4elephant", "text/arXiv/CL/")
+    #print(f"ds[0].keys(): {ds[0].keys()}")
+    assert ds
+    chunk_len=4096
+    min_stride = 64
+    max_waste = 64
+    generator:TextDS2TokensGenerator = TextDS2TokensGenerator(ds,tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste, verbose=True)
+    tokens_ds= Dataset.from_generator(generator)
+
+    num_items:int = 0 
+    for ds_item in tokens_ds:
+        num_items += 1
+    assert num_items  == 14 
+
+    
 

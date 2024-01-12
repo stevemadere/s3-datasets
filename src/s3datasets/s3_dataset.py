@@ -45,7 +45,9 @@ class S3Dataset:
         """
         keys: List[str] = batch["key"]
         blobs: List[bytes] = [self._load_obj(key) for key in keys]
-        return { "key": keys, "data": blobs }
+        i =  { "key": keys, "data": blobs }
+        #print(f"augmenting and returning {i.keys()}")
+        return i
         
     
     # custom pickling methods to enable fingerprinting for Dataset with_transform compatibility 
