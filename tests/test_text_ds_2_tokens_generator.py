@@ -228,4 +228,3 @@ def test_text_ds_2_tokens_generator_exhaustion(multiple_text_item_dataset) -> No
     expected_num_items = 83 if use_ascii_tokenizer  else 26
     assert num_items  == expected_num_items
 
-
