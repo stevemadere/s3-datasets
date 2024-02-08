@@ -3,7 +3,7 @@ import datasets
 import gzip
 import boto3
 import json
-from botocore.client import BaseClient
+from botocore.client import BaseClient as BotocoreBaseClient
 from botocore.exceptions import BotoCoreError
 
 from typing import List, Union, Dict, Any, cast
@@ -17,23 +17,32 @@ VALID_AWS_AUTH_VARS = ['AWS_PROFILE', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKE
 class S3Dataset:
     """
     This class provides functionality to create lazily-loaded Huggingface datasets
-    from objects stored in S3 buckets. The datasets are created using the `from_bucket`
-    class method, which selects objects from the S3 bucket based on specified criteria.
-    Initially, only the keys of the selected S3 objects are locally stored, it is not
-    until a dataset item is accessed that the S3 object is actually fetched from S3.
+    from objects stored in S3 buckets.
 
-    The base class implementation of `S3Dataset` produces datasets with two columns:
+    The constructor is passed criteria to determine which objects in the source S3 Bucket
+    are to be used as part of the Dataset.
+
+    Instances of this class can be converted to actual Dataset instances via the methods
+    to_keys_dataset() (just the selected keys) and to_full_dataset() (both keys and content). 
+
+    The Dataset returned by to_full_dataset() is loaded lazily from a generator to
+    reduce memory footprint. i.e.  Initially, only the keys of the selected S3 objects
+    are locally stored, it is not until a specific Dataset item is accessed that the
+    S3 object assiciated with it is actually fetched from S3.
+
+    The base class implementation of `S3Dataset` produces full Datasets with two columns:
     1. 'key': The key of the object in the S3 bucket.
     2. 'data': The raw binary data of the object.
+    This is suitable for images, pdfs, and the like.
 
     There are subclasses like `S3TextDataset` and `S3JsonDataset` that extend this functionality.
-    These subclasses create datasets with the following columns:
-    - `S3TextDataset`: ['key', 'text'], where 'text' is the text content of the object.
+    These subclasses create Datasets with the following columns:
+    - `S3TextDataset`: ['key', 'text'], where 'text' is the utf-8 text content of the object.
     - `S3JsonDataset`: ['key', 'obj'], where 'obj' is the deserialized JSON object.
 
     Attributes:
-        bucket_name (str): The name of the S3 bucket connected to this dataset.
-        s3_client (BaseClient): An instance of a boto3 S3 client to interact with the S3 bucket.
+        bucket_name (str): The name of the S3 bucket connected to this S3Dataset.
+        s3_client (BotocoreBaseClient): An instance of a boto3 S3 client to interact with the S3 bucket.
 
     Example Usage:
         # Create an S3Dataset instance from all objects in the bucket with a specific key prefix.
@@ -41,23 +50,16 @@ class S3Dataset:
 
     """
     bucket_name: str
-    s3_client: BaseClient
+    s3_client: BotocoreBaseClient
+    key_list: list[str]
 
-    def __init__(self,bucket_name: str) -> None:
-        # Check that at least one of the VALID_AWS_AUTH_VARS is set in the environment and raise an error if none are
-        if not any(var in os.environ for var in VALID_AWS_AUTH_VARS):
-            raise ValueError("One of the following env vars must be set to authenticate to AWS: " + ", ".join(VALID_AWS_AUTH_VARS))
-        self.bucket_name: str = bucket_name
-        self.s3_client= cast(BaseClient, boto3.client('s3'))
-
-    @classmethod
-    def from_bucket(cls, bucket_name: str,*,
+    def __init__(self, bucket_name: str,*,
                     key_list: Union[List[str],None] = None,
                     prefix: Union[str,None] = None,
-                    dataset_id: Union[str,None] = None) -> datasets.Dataset:
+                    dataset_id: Union[str,None] = None) -> None:
         """
         Constructs an `S3Dataset` instance from specified objects in an Amazon S3 bucket.
-        This factory method allows the creation of a dataset using one of four methods to
+        This factory method allows the creation of a Dataset using one of four methods to
         select objects from the bucket. Only one selection method should be used;
         specifying more than one will result in an error.
 
@@ -69,37 +71,71 @@ class S3Dataset:
 
         Args:
             bucket_name (str): The name of the S3 bucket.
-            key_list (List[str], optional): A list of object keys for creating the dataset. Defaults to None.
-            prefix (str, optional): A prefix to match object keys for dataset creation. Defaults to None.
+            key_list (List[str], optional): A list of object keys for creating the S3Dataset. Defaults to None.
+            prefix (str, optional): A prefix to match object keys for S3Dataset creation. Defaults to None.
             dataset_id (str, optional): The key of an S3 object containing a JSON-encoded list of keys
-                for dataset creation. Defaults to None.
-
-        Returns:
-            datasets.Dataset: An instance of `datasets.Dataset` containing the selected S3 objects.
+                for S3Dataset creation. Defaults to None.
 
         Raises:
             ValueError: If more than one selection method (key_list, prefix, dataset_id) is specified.
 
         Examples:
             s3_dataset = S3Dataset.from_bucket(bucket_name="my_bucket", prefix="images/")
+            training_images_ds = s3_dataset.to_full_dataset()
             # This creates an S3Dataset instance including all objects in "my_bucket" with keys starting with "images/".
 
             s3_dataset = S3TextDataset.from_bucket(bucket_name="my_bucket", dataset_id='datasets/subset1.json.gz')
+            training_objects_ds = s3_dataset.to_full_dataset()
             # This creates an S3Dataset instance from the objects whose keys are listed in the S3 object with the key datasets/subset1.json.gz
         """
+        # Check that at least one of the VALID_AWS_AUTH_VARS is set in the environment and raise an error if none are
+        if not any(var in os.environ for var in VALID_AWS_AUTH_VARS):
+            raise ValueError("One of the following env vars must be set to authenticate to AWS: " + ", ".join(VALID_AWS_AUTH_VARS))
+        self.bucket_name: str = bucket_name
+        self.s3_client= cast(BotocoreBaseClient, boto3.client('s3'))
+
         num_key_options_provided = sum([prefix is not None, dataset_id is not None, key_list is not None])
         if num_key_options_provided > 1:
             raise ValueError("S3Dataset(): caller can provide at most one of key_list, prefix or dataset_id")
-        s3_dataset: S3Dataset  = cls(bucket_name)
-        if not key_list:
-            if dataset_id:
-                key_list = s3_dataset._load_key_list_from_object(dataset_id)
-            else:
-                effective_prefix = prefix if prefix else ''
-                key_list = s3_dataset._get_keys(effective_prefix)
-        keys_dataset = datasets.Dataset.from_dict({"key" : key_list})
-        full_dataset = keys_dataset.with_transform(s3_dataset.augment_batch_with_content)
+        if key_list:
+            self.key_list = list(key_list)
+        elif dataset_id:
+            self.key_list = self._load_key_list_from_object(dataset_id)
+        else:
+            effective_prefix = prefix if prefix else ''
+            self.key_list = self._get_keys_with_prefix(effective_prefix)
+
+    def keys(self):
+        return self.key_list
+
+    def to_keys_dataset(self):
+        """ Make a Huggingface dataset containing the keys of this S3Dataset """
+        return datasets.Dataset.from_dict({"key" : self.keys()})
+
+    def to_full_dataset(self):
+        """
+            Generates a Huggingface dataset from the S3Dataset that includes both
+            key and content (either 'text' (utf-8 decoded) or 'data' (raw) or 'obj' (json deserialized)) columns
+        """
+        keys_dataset = self.to_keys_dataset()
+        full_dataset = keys_dataset.with_transform(self.augment_batch_with_content)
         return full_dataset
+
+    @classmethod
+    def from_bucket(cls, bucket_name: str,
+                    # accept any keyword args
+                    **kwargs) -> datasets.Dataset:
+        """ Deprecated factory method to directly generate a Huggingface dataset
+            from a bucket.
+            Takes the same arguments as the constructor.
+
+            Instead, you should just call to the constructor to make an 
+            S3Dataset and then call to_full_dataset() on that object.
+            to get the same result.
+        """
+        s3_dataset: S3Dataset  = cls(bucket_name, **kwargs)
+        ds = s3_dataset.to_full_dataset()
+        return ds
 
     def augment_batch_with_content(self, batch: Dict[str,List[str]]) -> dict:
         """ Override this method in subclasses to do the work of converting whatever is in
@@ -123,9 +159,9 @@ class S3Dataset:
     def __setstate__(self, state):
         self.__dict__.update(state)
         # Reinitialize the s3_client
-        self.s3_client= cast(BaseClient, boto3.client('s3'))
+        self.s3_client= cast(BotocoreBaseClient, boto3.client('s3'))
 
-    def _get_keys(self, prefix: str) -> List[str]:
+    def _get_keys_with_prefix(self, prefix: str) -> List[str]:
         response = self.s3_client.list_objects_v2(Bucket=self.bucket_name, Prefix=prefix)
         keys: List[str] = [item['Key'] for item in response.get('Contents', [])]
         while response.get('IsTruncated', False):
