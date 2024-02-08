@@ -19,7 +19,7 @@ pip install "git+https://github.com/stevemadere/s3-datasets.git@v2.0"
 
 #eventually:
 
-pip install <s3-datasets>
+pip install s3-datasets
 
 
 ```
@@ -79,6 +79,3 @@ Contributions are welcome! Please submit pull requests or open issues to suggest
 
 Apache 2.0
 
----
-
-Ensure to replace `<module-name>` with your actual module name and fill in any placeholders (`# Incorporate usage example for TextDS2TokensGenerator`) with appropriate usage examples or additional instructions as needed. This README template aims to provide a comprehensive overview for potential users of your module, emphasizing ease of use and practical applications.
