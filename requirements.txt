@@ -1,0 +1,8 @@
+datasets
+boto3
+typing
+diskcache
+transformers
+torch
+pytest
+moto
