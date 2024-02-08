@@ -1,6 +1,3 @@
-To create a README.md for your Python module, which includes `S3Dataset` and `TextDS2TokensGenerator` submodules, we'll focus on highlighting the main features, installation, usage examples, and other relevant sections to guide users. The README should succinctly communicate the purpose of your module, how to get started, and provide clear examples of its use. Below is a draft structure for your README.md:
-
----
 
 # Python Module for Huggingface Datasets from S3
 
