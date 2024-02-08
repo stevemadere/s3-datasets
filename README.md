@@ -58,16 +58,35 @@ my_hf_dataset:datasets.Dataset = s3_dataset.to_full_dataset()
 
 ### S3Dataset
 
-`S3Dataset` facilitates the creation of datasets from S3. It supports various modes of selection for bucket objects and allows for lazy loading of data to conserve memory.
+`S3Dataset` facilitates the creation of datasets from S3. It supports various modes of selection for bucket objects and allows for lazy loading of data to conserve memory.  It can also pre-process the content of the S3 objects to interpret them as binary data, text, or json to be automatically decoded into objects.
 
 #### Initialization
 
 ```python
 # Direct specification with a list of keys
-dataset = S3Dataset(bucket_name="my_bucket", key_list=["file1.txt", "file2.txt"])
+s3dataset = S3Dataset(bucket_name="my_bucket", key_list=["file1.txt", "file2.txt"])
 
-# Using a dataset ID pointing to a JSON list of keys
-dataset = S3Dataset(bucket_name="my_bucket", dataset_id="path/to/key_list.json")
+# Using a dataset ID pointing to a JSON-encoded list of keys
+s3dataset = S3Dataset(bucket_name="my_bucket", dataset_id="path/to/key_list.json")
+
+# For either of the examples above, use the subclass S3TextDataset or S3JSONDataset to get utf-8 text or objects respectively
+
+s3textdataset = S3TextDataset(bucket_name="my_bucket", key_list=["textdocs/file1.txt", "textdocs/file2.txt"])
+s3jsonataset = S3JSONDataset(bucket_name="my_bucket", key_list=["objects/o1.json", "objects/o2.json"])
+
+```
+
+#### Converting to huggingface dataset
+
+t_dataset:datasets.Dataset = s3textdataset.to_full_dataset()
+some_text:str = t_dataset[0]['text']
+
+
+o_dataset:datasets.Dataset = s3jsondataset.to_full_dataset()
+an_object:any = o_dataset[0]['obj']
+
+
+
 ```
 
 
