@@ -47,11 +47,11 @@ my_hf_dataset:datasets.Dataset = s3_dataset.to_full_dataset()
 
 ```python
 
-	import datasets
-	from tokengenerators import TextDS2TokensGenerator
+    import datasets
+    from tokengenerators import TextDS2TokensGenerator
 
     generator:TextDS2TokensGenerator = TextDS2TokensGenerator(my_hf_dataset,tokenizer, chunk_len=2048, min_stride= 64, max_waste=64)
-	training_ds:datasets.IterableDataset = datasets.IterableDataset.from_generator(generator)
+    training_ds:datasets.IterableDataset = datasets.IterableDataset.from_generator(generator)
 ```
 
 ## Usage
