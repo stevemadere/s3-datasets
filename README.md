@@ -85,7 +85,58 @@ some_text:str = t_dataset[0]['text']
 o_dataset:datasets.Dataset = s3jsondataset.to_full_dataset()
 an_object:any = o_dataset[0]['obj']
 
+### TextDS2TokensGenerator
 
+The `TextDS2TokensGenerator` is a tool for converting a dataset of text documents into tokenized chunks of fixed length suitable for LLM training with minimal training startup delay. It was designed to ease the process of domain-adapting a large language model (LLM) from a corpus of documents of varying sizes but typically exceeding the context window used for training.
+
+It can be used with Dataset.from_generator() to build a dataset of token sequences of a specified fixed length in a lazy manner, load and tokenizing data just-in-tim as the trainer processes it.
+
+#### Key Features
+
+- **Efficient Tokenization**: Generates token sequences lazily, saving significant memory when working with large datasets.
+- **Flexible Document Handling**: Capable of slicing long documents into fixed-length chunks with configurable overlap and waste thresholds, ensuring comprehensive coverage of the text data.
+- **Versatile Dataset Compatibility**: Works seamlessly with both `IterableDataset` and regular `Dataset` instances from the Huggingface `datasets` library.
+- **Adaptive Stride**: Tokenizes text documents with _"adaptive stride"_ ensuring the longest continuous context possible to maximize real learning.
+> e.g. When producing tokenized chunks of 4k tokens, a document that would tokenize to 4k+min_stride+1 tokens total will be tokenized as two chunks of exactly 4k tokens, one anchored at the beginning and the other anchored at the end with whatever overlap is necessary to achieve that. This holds true for any larger documents up to 8k - min_stride.  Once the tokenized length exceeds 8k-min_stride, the number of chunks produced is increased to 3 with substantial stride (overlap) of the chunks.    In this way, the chunks are always 4k long for efficient training and all text is seen by the model with sufficient prefix context (as defined by min_stride)
+
+
+
+#### Usage
+
+To utilize the `TextDS2TokensGenerator`, initialize it with your dataset, tokenizer, and configuration for chunk length, stride, and waste. Here is a basic example:
+
+```python
+from your_module_name import TextDS2TokensGenerator
+from transformers import AutoTokenizer
+from datasets import load_dataset
+
+# Load your dataset
+dataset = load_dataset('path_to_your_dataset')
+
+# Initialize your tokenizer
+tokenizer = AutoTokenizer.from_pretrained('your_preferred_model')
+
+# Create the TextDS2TokensGenerator instance
+generator = TextDS2TokensGenerator(
+    source_dataset=dataset,
+    base_tokenizer=tokenizer,
+    text_field_name="text",  # The field in your dataset containing text documents
+    chunk_len=4096,          # Desired token sequence length
+    min_stride=64,           # Minimum stride between chunks
+    max_waste=64,            # Maximum allowed tokens to waste per chunk
+    include_all_keys=False   # Whether to include all other keys from the original dataset items
+)
+
+# Generate the tokenized dataset
+tokenized_dataset = Dataset.from_generator(generator)
+```
+
+#### Customization and Advanced Usage
+
+- **Chunk Length (`chunk_len`)**: Adjust this parameter to match the input size expected by your model.
+- **Stride (`min_stride`)**: Control the overlap between consecutive chunks to ensure sufficient context to make the training on every token meaningful.
+- **Waste (`max_waste`)**: Fine-tune the balance between coverage and efficiency by specifying the maximum number of tokens that can be disregarded (never seen during training) at the end of a document.
+- **Inclusion of Original Keys (`include_all_keys`)**: Optionally include all key-value pairs from the original dataset items in the tokenized output, excluding the text itself.  (This is mostly used for debugging and profiling)
 
 ```
 
