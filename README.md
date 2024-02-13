@@ -6,7 +6,7 @@ This Python module provides tools to work seamlessly with data stored in Amazon 
 ## Features
 
 - **S3Dataset**: An adapter for creating lazily-loaded Huggingface datasets from S3 bucket contents. Supports filtering by key prefixes, explicit key lists, or dataset identifiers for flexible dataset creation.
-- **Lazy Tokenization**: A utility for generating tokens from dataset items on-the-fly, optimizing memory usage during the preparation of large datasets for training or fine-tuning language models.
+- **Lazy Tokenization**: A utility for generating tokens from dataset items on-the-fly, reducing startup latency and network traffic during the preparation of large datasets for training or fine-tuning language models.
 
 ## Installation
 
@@ -43,7 +43,7 @@ s3_dataset: S3TextDataset = S3TextDataset(bucket_name="my_bucket", prefix="my_da
 my_hf_dataset:datasets.Dataset = s3_dataset.to_full_dataset()
 ```
 
-4. **Lazy Tokenization**: Utilize the `TextDS2TokensGenerator` to prepare your data for model training without loading everything into memory.
+4. **Lazy Tokenization**: Utilize the `TextDS2TokensGenerator` to prepare your data for model training without downloading all of the data before training begins.
 
 ```python
 
@@ -58,7 +58,7 @@ my_hf_dataset:datasets.Dataset = s3_dataset.to_full_dataset()
 
 ### S3Dataset
 
-`S3Dataset` facilitates the creation of datasets from S3. It supports various modes of selection for bucket objects and allows for lazy loading of data to conserve memory.  It can also pre-process the content of the S3 objects to interpret them as binary data, text, or json to be automatically decoded into objects.
+`S3Dataset` facilitates the creation of datasets from S3. It supports various modes of selection for bucket objects and allows for lazy loading of data to reduce network traffic and startup delays.  It can also pre-process the content of the S3 objects to interpret them as binary data, text, or json to be automatically decoded into objects.
 
 #### Initialization
 
