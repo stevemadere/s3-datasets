@@ -6,7 +6,7 @@ This Python module provides tools to work seamlessly with data stored in Amazon 
 ## Features
 
 - **S3Dataset**: An adapter for creating lazily-loaded Huggingface datasets from S3 bucket contents. Supports filtering by key prefixes, explicit key lists, or dataset identifiers for flexible dataset creation.
-- **Lazy Tokenization**: A utility for generating tokens from dataset items on-the-fly, reducing startup latency and network traffic during the preparation of large datasets for training or fine-tuning language models.
+- **TextDS2TokensGenerator**: A utility for generating tokens from dataset items on-the-fly, reducing startup latency and network traffic during the preparation of large datasets for training or fine-tuning language models.
 
 ## Installation
 
