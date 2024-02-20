@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "s3datasets"
+version = "2.0.0a2"
+authors = [
+  { name="Steve Madere", email="steve@stevemadere.com" },
+]
+description = "Lazy-loading HF Datasets sourced from AWS S3 buckets and a chunking text document tokenizer."
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence"
+]
+dependencies=[
+        'datasets',
+        'boto3',
+        'typing; python_version<"3.5"',
+        'diskcache',
+        'transformers',
+        'torch'
+]
+
+[project.urls]
+Homepage = "https://github.com/stevemadere/s3-datasets"
+Issues = "https://github.com/stevemadere/s3-datasets/issues"
+
