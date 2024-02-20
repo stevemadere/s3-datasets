@@ -5,7 +5,6 @@ if [ "$1" == "-t" ] || [ "$1" == "--test" ]; then
   REPOSITORY=testpypi
 else
   REPOSITORY=pypi
-  exit 1
 fi
 rm -f dist/s3datasets*
 python3 -m build
