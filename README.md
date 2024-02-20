@@ -14,13 +14,10 @@ Ensure you have Python 3.6+ installed. Install the module and its dependencies v
 
 ```sh
 
-#for now:
-pip install "git+https://github.com/stevemadere/s3-datasets.git@v2.0"
-
-#eventually:
-
 pip install s3-datasets
 
+# or from source
+# pip install "git+https://github.com/stevemadere/s3-datasets.git@v2.0"
 
 ```
 
