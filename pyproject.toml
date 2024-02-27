@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "s3datasets"
-version = "2.0.0a2"
+version = "2.0.0a3"
 authors = [
   { name="Steve Madere", email="steve@stevemadere.com" },
 ]
 description = "Lazy-loading HF Datasets sourced from AWS S3 buckets and a chunking text document tokenizer."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.6"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: Apache Software License",

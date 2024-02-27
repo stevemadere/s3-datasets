@@ -2,10 +2,10 @@ from setuptools import setup, find_packages
 
 setup(
     name='s3datasets',
-    python_requires='>=3.11',
+    python_requires='>=3.6',
     description = "Lazy-loading HF Datasets sourced from AWS S3 buckets and a chunking text document tokenizer.",
     long_description="This Python module provides tools to work seamlessly with data stored in Amazon S3 buckets, specifically designed for creating Huggingface datasets.Dataset instances. It includes two primary components: S3Dataset for creating datasets from S3 objects, and TextDS2TokensGenerator, a generator utility for lazily tokenizing text data, facilitating domain adaptation for language models.",
-    version='2.0.0a2',
+    version='2.0.0a3',
     package_dir={'': 'src'},  # This tells setuptools where to find packages
     packages=find_packages(where='src'),
     install_requires=[
