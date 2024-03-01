@@ -6,7 +6,7 @@ import re
 sys.path.insert(0,os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
 from tokengenerators import (DSItem, TextDS2TokensGenerator)
-from typing import cast
+from typing import cast, Any
 from transformers import PreTrainedTokenizerFast, AutoTokenizer
 import datasets
 import pytest
@@ -84,6 +84,8 @@ class ASCIITokenizer:
         return "".join([chr(c) for c in tokens])
 
     def __call__(self, text: str, max_length: int|None = None , return_length: bool = False, padding:None|str|bool = False, truncation:None|bool = None) -> dict[str,list]:
+        if truncation: # silence the unused params warning
+            pass
         input_ids:list[int] = ASCIITokenizer.encode(text, max_length)
         num_tokens: int = len(input_ids)
         if max_length and num_tokens < max_length and padding == 'max_length':
@@ -115,12 +117,12 @@ tokenizer: PreTrainedTokenizerFast= \
     cast(PreTrainedTokenizerFast,ASCIITokenizer()) if use_ascii_tokenizer \
     else AutoTokenizer.from_pretrained(huggingface_model_path, use_fast=True)
 
+tokenizer.pad_token = tokenizer.eos_token
 
 
 
 # yield_tokenized_chunks_from_text_item
 def test_yield_tokenized_chunks_from_text_item(single_text_item_dataset) -> None:
-    tokenizer.pad_token = tokenizer.eos_token
     the_document = single_text_item_dataset[0]["text"]
 
     chunk_len=4096
@@ -150,7 +152,6 @@ def test_yield_tokenized_chunks_from_text_item(single_text_item_dataset) -> None
 
 # TextDS2TokensGenerator
 def test_text_ds_2_tokens_generator_one_doc(single_text_item_dataset) -> None:
-    tokenizer.pad_token = tokenizer.eos_token
     the_document = single_text_item_dataset[0]["text"]
 
     chunk_len=4096
@@ -183,7 +184,6 @@ def test_text_ds_2_tokens_generator_one_doc(single_text_item_dataset) -> None:
 
 # TextDS2TokensGenerator
 def test_text_ds_2_tokens_generator_multi_doc(multiple_text_item_dataset) -> None:
-    tokenizer.pad_token = tokenizer.eos_token
     texts = [dsi["text"] for dsi in  multiple_text_item_dataset]
 
     chunk_len=4096
@@ -215,15 +215,49 @@ def test_text_ds_2_tokens_generator_multi_doc(multiple_text_item_dataset) -> Non
 
 
 
+def test_features_dict_standard_keys(multiple_text_item_dataset) -> None:
+    chunk_len=4096
+    min_stride = 64
+    max_waste = 64
+    generator:TextDS2TokensGenerator = TextDS2TokensGenerator(multiple_text_item_dataset,tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste)
+
+    features_dict: dict[str,Any] = generator._features_dict()
+    tokenizer_output_fields=["input_ids", "labels", "attention_mask"]
+    extra_fields = ["slice_index"]
+    assert set(features_dict.keys()) == set(tokenizer_output_fields + extra_fields)
+    for feature in tokenizer_output_fields:
+        assert features_dict[feature].length == chunk_len
+
+def test_features_dict_include_all_keys_raises(multiple_text_item_dataset) -> None:
+    chunk_len=4096
+    min_stride = 64
+    max_waste = 64
+    generator:TextDS2TokensGenerator = TextDS2TokensGenerator(multiple_text_item_dataset,tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste,include_all_keys=True)
+
+    # confirm that calling _features_dict raises a RuntimeError with a message matching include_all_keys
+    with pytest.raises(RuntimeError) as exc:
+        generator._features_dict()
+    assert "include_all_keys" in str(exc.value)
+
+    # confirm that calling _features_dict with force does not raise that error
+    features_dict = generator._features_dict(force=True)
+    assert isinstance(features_dict, dict)
+
+
+
+
+
+
 def test_text_ds_2_tokens_generator_exhaustion(multiple_text_item_dataset) -> None:
     chunk_len=4096
     min_stride = 64
     max_waste = 64
     generator:TextDS2TokensGenerator = TextDS2TokensGenerator(multiple_text_item_dataset,tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste)
-    tokens_ds= datasets.Dataset.from_generator(generator)
+    tokens_ds= datasets.IterableDataset.from_generator(generator)
 
     num_items:int = 0
     for ds_item in tokens_ds:
+        assert ds_item
         num_items += 1
     expected_num_items = 83 if use_ascii_tokenizer  else 26
     assert num_items  == expected_num_items

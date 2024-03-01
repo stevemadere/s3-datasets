@@ -1,7 +1,21 @@
 import torch
 from transformers import PreTrainedTokenizerFast, BatchEncoding
-from datasets import Dataset, IterableDataset
+from datasets import Dataset, IterableDataset, Features, Sequence, Value
 from typing import NewType, Dict, List, Any, Iterator, cast
+
+""" work status:
+
+- Need to add and test ability to get and set a cursor.
+Setting the cursor will necessitate either passing it to the constructor or re-initializing source_dataset
+Getting the cursor will require accessing construction_dataset directly
+
+Check to see if construction_dataset responds to set_cursor and get_cursor with this pattern:
+if hasattr(obj, 'the_method') and callable(getattr(obj, 'the_method')):
+    obj.the_method()
+
+- Need to add and test estimate_available_chunks()
+
+"""
 
 
 # Why do I need a checksum of my module source code? you may ask.
@@ -60,7 +74,8 @@ class TextDS2TokensGenerator:
         s3_dataset = S3TextDataset(my_bucket_name, key_prefix)
         ds_dict = s3_dataset.train_test_split(test=0.05)
         ds_generator = TextDS2TokensGenerator(ds_dict["train"], my_tokenizer, text_field_name = "text", chunk_len = 4096, min_stride = 64, max_waste = 64)
-        training_dataset = Dataset.from_generator(ds_generator)
+
+        training_dataset = IterableDataset.from_generator(ds_generator, features=ds_generator.features())
 
         
     """
@@ -88,6 +103,18 @@ class TextDS2TokensGenerator:
         self.include_all_keys = include_all_keys
         self._current_item_generator = None
 
+    def _features_dict(self, force:bool = False) -> dict[str,Any]:
+        if self.include_all_keys and not force:
+            raise RuntimeError(f"Cannot predict the features that will be returned from {self.__class__} when include_all_keys option is enabled")
+        fd: dict[str, Any] = { "slice_index": Value("int64") }
+        tokenizer_output_fields = ['input_ids', 'labels', 'attention_mask']
+        for field_name in tokenizer_output_fields:
+            fd[field_name] = Sequence(feature= Value("int64"), length = self.chunk_len)
+        return fd
+
+    def features(self, force: bool = False) -> Features:
+        fd = self._features_dict(force)
+        return Features(fd)
 
     def yield_tokenized_chunks_from_text_item(self, text_item: DSItem) -> Iterator[DSItem]:
         text: str = text_item[self.text_field_name]
@@ -113,7 +140,7 @@ class TextDS2TokensGenerator:
             generated_item:DSItem = DSItem({"input_ids":None})
             for k,v in tokens.items():
                 if k == "length":
-                    continue
+                    continue # do not include the length field in the yielded items
                 values_slice = v[chunk_slice].copy()
                 t = torch.tensor(values_slice)
                 generated_item[k]=t
@@ -199,8 +226,10 @@ class TextDS2TokensGenerator:
 
     # custom pickling methods to enable fingerprinting for Dataset.with_transform() compatibility 
     # No pickling/unpickling will actually ever be desired, just a signature to detect changes
-    @staticmethod
+    @classmethod
     def _reconstruct(cls, args, checksum):
+        if checksum: # silence the unused params warning
+            pass
         obj = cls(*args)
         return obj
 
@@ -228,8 +257,5 @@ class TextDS2TokensGenerator:
         self.__dict__.update(state)
         # Reinitialize the s3_client
         self._current_item_generator= None
-
-
-
 
 
