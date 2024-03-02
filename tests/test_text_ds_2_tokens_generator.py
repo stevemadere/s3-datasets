@@ -131,7 +131,7 @@ def test_tokenized_chunks_from_text_item(single_text_item_dataset) -> None:
     max_waste = 64
     generator:TextDS2TokensGenerator = TextDS2TokensGenerator(single_text_item_dataset,tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste)
     item:DSItem = cast(DSItem, single_text_item_dataset[0])
-    chunks:list[DSItem] = [item for item in generator.tokenized_chunks_from_text_item(item)]
+    chunks:list[DSItem] = [item for item in generator._tokenized_chunks_from_text_item(item)]
     assert len(chunks[0]["input_ids"]) == chunk_len
     for chunk in chunks:
         assert len(chunk["input_ids"]) == chunk_len

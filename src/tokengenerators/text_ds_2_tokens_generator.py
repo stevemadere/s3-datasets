@@ -3,6 +3,7 @@ from transformers import PreTrainedTokenizerFast, BatchEncoding
 from datasets import Dataset, IterableDataset, Features, Sequence, Value
 from typing import NewType, Dict, List, Any, Iterator, cast
 from functools import total_ordering
+import copy
 
 """ work status:
 
@@ -21,9 +22,9 @@ if hasattr(obj, 'the_method') and callable(getattr(obj, 'the_method')):
 # Why do I need a checksum of my module source code? you may ask.
 #  Well, let me tell you a story of hair-pulling insanity during debugging when
 #  huggingface Dataset decides to cache the implementation of my class
-#  *in the freaking dataset cache*  and uses old versions of the code (some but not all of it!)
+#  *in the freaking dataset cache*  and uses old versions of the code (some, but not all of it!)
 #  while executing my dataaset generator even as I'm debugging and modifying my source code.
-#  To prevent this insanity-inducing infuriating behavior, I need to make sure the
+#  To prevent this insanity-inducing, infuriating behavior, I need to make sure the
 #  'signature' of my Dataset (which depends on the generator) changes if my source code
 #  changes.  Thus, I need to include MODULE_CHECKSUM somewhere in the pickled rendering
 #  of the generator to ensure that if the code changes at all, the Dataset's fingerprint
@@ -37,6 +38,9 @@ import os
 MODULE_CHECKSUM = None
 
 def compute_checksum(filepath):
+    """ Computes a checksum of the named file.
+        Used for detecting source code changes.
+    """
     hasher = hashlib.sha256()
     with open(filepath, 'rb') as f:
         buf = f.read()
@@ -45,7 +49,8 @@ def compute_checksum(filepath):
 
 # Compute checksum using __file__ to get the current module's path
 module_path = os.path.abspath(__file__)
-# F-You huggingface Dataset caching!
+
+# to notify huggingface Dataset caching when this code changes
 MODULE_CHECKSUM = compute_checksum(module_path)
 
 
@@ -55,13 +60,10 @@ DSItem = NewType('DSItem',Dict[str,Any])
 #TokenizerTensorResult = NewType('TokenizerTensorResult', dict[str,torch.Tensor])
 
 
-# convenience method to convert an indexable dataset to an iterable dataset
-def dataset_to_iterable(dataset: Dataset, offset: int = 0) -> Iterator[DSItem]:
-    #print(f"class of dataset being converted to iterable is {dataset.__class__}")
-    for i in range(offset,len(dataset)):
-        yield cast(DSItem,dataset[i])
-
 class RewindBuffer:
+    """ Holds a limited cache of dataset items preceding the cursor to allow for a some
+        rewind capacity in otherwise unindexable IterableDataset instances.
+    """
     past_items:List
     max_size: int
     index_offset:int
@@ -92,6 +94,11 @@ class RewindBuffer:
 
 
 class AddressableWrapOfIterableDataset:
+    """ Wraps an IterableDataset to give it addressable Dataset semantics.
+        Uses a rewind buffer to allow addressing at offsets with a limited
+        range prior to the current iteration.  Uses forward scanning to
+        address after the current iteration.
+    """
     source_dataset:IterableDataset
     max_rewind:int
     rewind_buffer: RewindBuffer
@@ -124,10 +131,19 @@ class AddressableWrapOfIterableDataset:
 
 
 
-# a json serializable struct with a source cursor and a chunk index
-# they should be comparable with a > operator
 @total_ordering
 class DSGeneratorCursor:
+    """
+       A cursor into a tokenized and chunked dataset generation stream.
+
+       Tracks the document in a source dataset of ordered documents
+       and a specific chunk of tokens produced from that document.
+
+       Can be saved by serializing the result of cursor_dict = cursor.to_dict() and
+       can be restored by deserializing that cursor_dict and calling
+       dsg_cursor = DSGeneratorCursor.from_dict(cursor_dict)
+    """
+
     source_index: int
     chunk_index: int
 
@@ -139,7 +155,7 @@ class DSGeneratorCursor:
         self.source_index = source_index
         self.chunk_index = chunk_index
 
-    # < cohparison operator
+    # < comparison operator
     def __lt__(self, other: 'DSGeneratorCursor') -> bool:
         if self.source_index == other.source_index:
             return self.chunk_index < other.chunk_index
@@ -152,32 +168,37 @@ class DSGeneratorCursor:
             return NotImplemented
         return self.source_index == other.source_index and self.chunk_index == other.chunk_index
 
-    def incr_chunk_index(self) -> int:
-        self.chunk_index += 1
-        return self.chunk_index
+    def incr(self, chunk_limit:int) -> 'DSGeneratorCursor':
+        new_chunk_index = self.chunk_index + 1
+        if new_chunk_index < chunk_limit:
+            self.chunk_index = new_chunk_index
+        else:
+            self.incr_source_index()
+        return self
 
     def incr_source_index(self) -> int:
         self.source_index += 1
         self.chunk_index = 0
         return self.source_index
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str,int]:
         return {"source_index": self.source_index, "chunk_index": self.chunk_index}
 
     @classmethod
-    def from_dict(cls, d: dict) -> 'DSGeneratorCursor':
-        return cls(d["source_index"], d["chunk_index"])
+    def from_dict(cls, d: dict[str,int]) -> 'DSGeneratorCursor':
+        return cls(source_index=d["source_index"], chunk_index = d["chunk_index"])
 
 
 class TextDS2TokensGenerator:
     """
-        Produces generators that can be used with Dataset.from_generator()
-        to tokenize a series of text Dataset items.
-        Instantiate a member of this class with an underlying dataset (which can be an IterableDataset or a Dataset)
-        containing text documents to be tokenized.
+        Produces generators that can be used with IterableDataset.from_generator()
+        to tokenize a series of text Dataset/IterableDataset items.
+        Instantiate a member of this class with an underlying dataset (which can be an
+        IterableDataset or a Dataset) containing text documents to be tokenized.
         This generator generates token sequences of a specified fixed length lazily,
-        thus saving memory when your dataset of text is absolutely huge.
-        It works particularly well in combination with S3TextDataset which lazily loads text documents from an S3 bucket.
+        thus saving significant local storage and network bandwidth when your dataset
+        of text is absolutely huge.  It works particularly well in combination with
+        S3TextDataset which lazily loads text documents from an S3 bucket.
 
         example usage:
 
@@ -190,14 +211,15 @@ class TextDS2TokensGenerator:
 
         # or for restartable training
         train_docs_dataset = S3TextDataset(my_bucket_name, dataset_id = '/datasets/BigTrainDS.json.gz')
-        saved_cursor_dict = json.load(open("saved_cursor.json", "r"))
+        cursor_file_name="train_dataset_cursor.json"
+        old_cursor_file_path = os.path.join(previous_checkpoint_dir, cursor_file_name)
+        saved_cursor_dict = json.load(open(old_cursor_file_path, "r"))
         saved_cursor = DSGeneratorCursor.from_dict(saved_cursor_dict)
         ds_generator2 = TextDS2TokensGenerator(train_docs_dataset, my_tokenizer, text_field_name = "text", chunk_len = 4096, min_stride = 64, max_waste = 64, cursor = saved_cursor)
         training_dataset2 = IterableDataset.from_generator(ds_generator2, features=ds_generator.features())
-        do_some_training_and_checkpoint(training_dataset2)
-        cursor = ds_generator2.get_cursor()
-        json.dump(cursor.to_dict(), open("saved_cursor.json", "w"))
-
+        new_checkpoint_dir = do_some_training_and_checkpoint(training_dataset2)
+        new_cursor_file_path = os.path.join(new_checkpoint_dir, cursor_file_name)
+        json.dump(ds_generator2.get_cursor().to_dict(), open(new_cursor_file_path, "w"))
 
     """
     construction_dataset: Dataset|IterableDataset
@@ -245,14 +267,14 @@ class TextDS2TokensGenerator:
         self.set_cursor(self._cursor)
         assert self._current_item_chunks
 
-    def set_cursor(self, cursor: DSGeneratorCursor):
-        if not (self._current_item_chunks and self._cursor.source_index == cursor.source_index):
-            self._get_source_item_at(cursor.source_index)
-        assert self._current_item_chunks and self._cursor.source_index == cursor.source_index
-        if cursor.chunk_index >= len(self._current_item_chunks):
-            raise IndexError(f"cursor {cursor.to_dict().__repr__()} addresses chunk out of range for item with {len(self._current_item_chunks)} chunks")
+    def set_cursor(self, new_cursor: DSGeneratorCursor):
+        if not (self._current_item_chunks and self._cursor.source_index == new_cursor.source_index):
+            item_chunks = self._get_item_chunks_at(new_cursor.source_index)
+        if new_cursor.chunk_index >= len(item_chunks):
+            raise IndexError(f"cursor {new_cursor.to_dict().__repr__()} addresses chunk out of range for item with {len(item_chunks)} chunks")
         else:
-            self._cursor.chunk_index = cursor.chunk_index
+            self._current_item_chunks = item_chunks
+            self._cursor = copy.deepcopy(new_cursor)
 
 
     def get_cursor(self) -> DSGeneratorCursor:
@@ -268,10 +290,22 @@ class TextDS2TokensGenerator:
         return fd
 
     def features(self, force: bool = False) -> Features:
+        """ Generate a Features object suitable for passing to IterableDataset.from_generator().
+            If the generator was constructed with the "include_all_keys" option set, it will be
+            inaccurate so the default behavior is to raise an error in that case.
+            Using the force option to this method skips raising an error and just returns
+            a possibly incomplete description of the generated features.
+
+            example usage :
+
+            tokens_generator = TextDS2TokensGenerator(text_dataset, tokenizer)
+            tokenized_ds = IterableDataset.from_generator(tokens_generator, features = tokens_generator.features())
+
+        """
         fd = self._features_dict(force)
         return Features(fd)
 
-    def tokenized_chunks_from_text_item(self, text_item: DSItem) -> list[DSItem]:
+    def _tokenized_chunks_from_text_item(self, text_item: DSItem) -> list[DSItem]:
         text: str = text_item[self.text_field_name]
         #print(f"text_item keys: {text_item.keys()}")
               # {text_item['key']}")
@@ -314,7 +348,7 @@ class TextDS2TokensGenerator:
             slice_index+=1
         return tokenized_chunks
 
-    # Need a callable form to make huggingface Dataset.from_generator(me) happy
+    # Need a callable form to make huggingface IterableDataset.from_generator(me) happy
     def __call__(self):
         iter = self.__iter__()
         for x  in iter:
@@ -323,35 +357,34 @@ class TextDS2TokensGenerator:
     def __iter__(self):
         return self
 
-    def _get_source_item_at(self, index: int):
+    def _get_item_chunks_at(self, index: int):
         #print(f"source_dataset: {self.source_dataset.__repr__()}")
         if index < 0:
             raise IndexError
         item = cast(DSItem, self.source_dataset[index] )
-
         assert isinstance(item[self.text_field_name], str)
-
-        item_chunks = self.tokenized_chunks_from_text_item(item)
-        self._cursor = DSGeneratorCursor(index,0)
-        self._current_item_chunks = item_chunks
-        #print(f"current_source_item keys: {current_source_item.keys()}")
+        item_chunks = self._tokenized_chunks_from_text_item(item)
+        return item_chunks
 
     def __next__(self) -> DSItem:
-        assert self._current_item_chunks
-        assert len(self._current_item_chunks) > 0
+        if not self._cursor:
+            self._cursor = DSGeneratorCursor(0,0)
+        if not self._current_item_chunks:
+            self._current_item_chunks = self._get_item_chunks_at(self._cursor.source_index)
         while True:
-            while self._cursor.chunk_index >= len(self._current_item_chunks):
+            while not (self._current_item_chunks and self._cursor.chunk_index < len(self._current_item_chunks)):
                 new_source_index = self._cursor.source_index+1
                 try:
-                    self._get_source_item_at(new_source_index)
-                    assert self._cursor.source_index == new_source_index
-                    assert self._cursor.chunk_index == 0
+                    self._current_item_chunks = self._get_item_chunks_at(new_source_index)
+                    self._cursor = DSGeneratorCursor(new_source_index,0)
                 except IndexError:
-                    # print(f"setting cursor to {new_source_index},0 at end of iteration")
+                    self._current_item_chunks = None
+                    #print(f"setting cursor to {new_source_index},0 at end of iteration")
                     self._cursor = DSGeneratorCursor(new_source_index,0)
                     raise StopIteration
+            assert self._current_item_chunks and self._cursor and self._cursor.chunk_index < len(self._current_item_chunks)
             item = self._current_item_chunks[self._cursor.chunk_index]
-            self._cursor.incr_chunk_index()
+            self._cursor.chunk_index += 1
             return item
 
     @staticmethod
@@ -408,21 +441,23 @@ class TextDS2TokensGenerator:
         """
         constructor_args = (self.construction_dataset, self.base_tokenizer, self.text_field_name, self.chunk_len, self.min_stride, self.max_waste, self.verbose, self.max_rewind)
         cls = self.__class__
-        # F-You huggingface Dataset caching!
+        # the MODULE_CHECKSUM is there to notify huggingface Dataset caching when the code changes
         return (cls._reconstruct, (cls, constructor_args, MODULE_CHECKSUM))
 
     def __getstate__(self) -> Dict[str, Any]:
         state: Dict[str, Any] = self.__dict__.copy()
-        # Remove the non-serializable s3_client from the state
-        if '_current_item_generator' in state:
-            del state['_current_item_generator']
-        # F-You huggingface Dataset caching!
+        # notify huggingface Dataset caching when the code changes
         state['MODULE_CHECKSUM'] = MODULE_CHECKSUM
+        # remove cursor information from signature
+        del state['_cursor']
+        del state['_current_item_chunks']
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
-        # Reinitialize the s3_client
-        self._current_item_generator= None
+        if not '_cursor' in self.__dict__:
+            self.__dict__['_cursor'] = DSGeneratorCursor(0,0)
+        if not '_current_item_chunks' in self.__dict__:
+            self.__dict__['_current_item_chunks'] = None
 
 
