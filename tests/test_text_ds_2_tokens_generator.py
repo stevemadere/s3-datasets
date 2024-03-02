@@ -1,6 +1,7 @@
 import sys
 import os
 import re
+import copy
 
 
 sys.path.insert(0,os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
@@ -121,8 +122,8 @@ tokenizer.pad_token = tokenizer.eos_token
 
 
 
-# yield_tokenized_chunks_from_text_item
-def test_yield_tokenized_chunks_from_text_item(single_text_item_dataset) -> None:
+# tokenized_chunks_from_text_item
+def test_tokenized_chunks_from_text_item(single_text_item_dataset) -> None:
     the_document = single_text_item_dataset[0]["text"]
 
     chunk_len=4096
@@ -130,7 +131,7 @@ def test_yield_tokenized_chunks_from_text_item(single_text_item_dataset) -> None
     max_waste = 64
     generator:TextDS2TokensGenerator = TextDS2TokensGenerator(single_text_item_dataset,tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste)
     item:DSItem = cast(DSItem, single_text_item_dataset[0])
-    chunks:list[DSItem] = [item for item in generator.yield_tokenized_chunks_from_text_item(item)]
+    chunks:list[DSItem] = [item for item in generator.tokenized_chunks_from_text_item(item)]
     assert len(chunks[0]["input_ids"]) == chunk_len
     for chunk in chunks:
         assert len(chunk["input_ids"]) == chunk_len
@@ -244,10 +245,6 @@ def test_features_dict_include_all_keys_raises(multiple_text_item_dataset) -> No
     assert isinstance(features_dict, dict)
 
 
-
-
-
-
 def test_text_ds_2_tokens_generator_exhaustion(multiple_text_item_dataset) -> None:
     chunk_len=4096
     min_stride = 64
@@ -259,6 +256,32 @@ def test_text_ds_2_tokens_generator_exhaustion(multiple_text_item_dataset) -> No
     for ds_item in tokens_ds:
         assert ds_item
         num_items += 1
+    expected_num_items = 83 if use_ascii_tokenizer  else 26
+    assert num_items  == expected_num_items
+
+def test_text_ds_2_tokens_get_cursor(multiple_text_item_dataset) -> None:
+    chunk_len=4096
+    min_stride = 64
+    max_waste = 64
+    generator:TextDS2TokensGenerator = TextDS2TokensGenerator(multiple_text_item_dataset,tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste)
+    tokens_ds= datasets.IterableDataset.from_generator(generator)
+
+    cursor = None
+    prev_cursor = None
+    num_items:int = 0
+    for ds_item in tokens_ds:
+        assert ds_item
+        num_items += 1
+        cursor = generator.get_cursor()
+        # print(f"num_items is {num_items}, cursor is {cursor.to_dict().__repr__()} prev_cursor is {prev_cursor.__repr__()}")
+        if prev_cursor:
+            if cursor.source_index == prev_cursor.source_index:
+                assert cursor.chunk_index > prev_cursor.chunk_index
+            else:
+                assert cursor.source_index > prev_cursor.source_index
+        prev_cursor =  copy.deepcopy(cursor)
+    cursor = generator.get_cursor()
+    assert cursor and cursor.source_index == len(multiple_text_item_dataset)
     expected_num_items = 83 if use_ascii_tokenizer  else 26
     assert num_items  == expected_num_items
 

@@ -2,12 +2,12 @@ import torch
 from transformers import PreTrainedTokenizerFast, BatchEncoding
 from datasets import Dataset, IterableDataset, Features, Sequence, Value
 from typing import NewType, Dict, List, Any, Iterator, cast
+from functools import total_ordering
 
 """ work status:
 
 - Need to add and test ability to get and set a cursor.
 Setting the cursor will necessitate either passing it to the constructor or re-initializing source_dataset
-Getting the cursor will require accessing construction_dataset directly
 
 Check to see if construction_dataset responds to set_cursor and get_cursor with this pattern:
 if hasattr(obj, 'the_method') and callable(getattr(obj, 'the_method')):
@@ -22,7 +22,7 @@ if hasattr(obj, 'the_method') and callable(getattr(obj, 'the_method')):
 #  Well, let me tell you a story of hair-pulling insanity during debugging when
 #  huggingface Dataset decides to cache the implementation of my class
 #  *in the freaking dataset cache*  and uses old versions of the code (some but not all of it!)
-#  while executing my dataaset generator even as I'm debugging and modifying my source code. 
+#  while executing my dataaset generator even as I'm debugging and modifying my source code.
 #  To prevent this insanity-inducing infuriating behavior, I need to make sure the
 #  'signature' of my Dataset (which depends on the generator) changes if my source code
 #  changes.  Thus, I need to include MODULE_CHECKSUM somewhere in the pickled rendering
@@ -54,10 +54,120 @@ DSItem = NewType('DSItem',Dict[str,Any])
 #TokenizerListResult = NewType('TokenizerListResult', Dict[str,List])
 #TokenizerTensorResult = NewType('TokenizerTensorResult', dict[str,torch.Tensor])
 
-def dataset_to_iterable(dataset: Dataset) -> Iterator[DSItem]:
+
+# convenience method to convert an indexable dataset to an iterable dataset
+def dataset_to_iterable(dataset: Dataset, offset: int = 0) -> Iterator[DSItem]:
     #print(f"class of dataset being converted to iterable is {dataset.__class__}")
-    for i in range(len(dataset)):
+    for i in range(offset,len(dataset)):
         yield cast(DSItem,dataset[i])
+
+class RewindBuffer:
+    past_items:List
+    max_size: int
+    index_offset:int
+
+    def __init__(self, max_size) -> None:
+        self.past_items = []
+        self.max_size = max_size
+        self.index_offset = 1
+
+    def add(self, item: Any) -> None:
+        self.past_items.append(item)
+        if len(self.past_items) > self.max_size:
+            self.past_items.pop(0)
+            self.index_offset += 1
+
+    def current_range(self):
+        return [self.index_offset, self.index_offset+ len(self.past_items)]
+
+    def contains(self,index: int) -> bool:
+        return index in range(*self.current_range())
+
+    def get(self,index) -> Any:
+        internal_index = index - self.index_offset
+        if internal_index < 0 or internal_index >= len(self.past_items):
+            raise ValueError("index outside of buffer")
+        else:
+            return self.past_items[internal_index]
+
+
+class AddressableWrapOfIterableDataset:
+    source_dataset:IterableDataset
+    max_rewind:int
+    rewind_buffer: RewindBuffer
+
+    def __init__(self, iterable_dataset: IterableDataset, max_rewind = 1024):
+        self.source_dataset = iterable_dataset
+        self.rewind_buffer = RewindBuffer(max_rewind)
+
+    # brackets operator
+    def __getitem__(self, index: int) -> DSItem:
+        if self.rewind_buffer.contains(index):
+            return self.rewind_buffer.get(index)
+        buffer_range = self.rewind_buffer.current_range()
+        if buffer_range[0] < index:
+            raise ValueError("index preceeds maximum rewind")
+
+        items_to_skip = index - buffer_range[1]
+        assert items_to_skip >= 0
+
+        item:DSItem|None = None
+        while items_to_skip > 0:
+            try:
+                item =  cast(DSItem,next(iter(self.source_dataset)))
+            except StopIteration:
+                raise IndexError
+            self.rewind_buffer.add(item)
+            items_to_skip -= 1
+        assert item != None
+        return item
+
+
+
+# a json serializable struct with a source cursor and a chunk index
+# they should be comparable with a > operator
+@total_ordering
+class DSGeneratorCursor:
+    source_index: int
+    chunk_index: int
+
+    def __init__(self, source_index: int= 0, chunk_index: int = 0):
+        if source_index < 0:
+            raise ValueError("source_index must be >= 0")
+        if chunk_index < 0:
+            raise ValueError("chunk_index must be >= 0")
+        self.source_index = source_index
+        self.chunk_index = chunk_index
+
+    # < cohparison operator
+    def __lt__(self, other: 'DSGeneratorCursor') -> bool:
+        if self.source_index == other.source_index:
+            return self.chunk_index < other.chunk_index
+        else:
+            return self.source_index < other.source_index
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, DSGeneratorCursor):
+            # don't attempt to compare against unrelated types
+            return NotImplemented
+        return self.source_index == other.source_index and self.chunk_index == other.chunk_index
+
+    def incr_chunk_index(self) -> int:
+        self.chunk_index += 1
+        return self.chunk_index
+
+    def incr_source_index(self) -> int:
+        self.source_index += 1
+        self.chunk_index = 0
+        return self.source_index
+
+    def to_dict(self) -> dict:
+        return {"source_index": self.source_index, "chunk_index": self.chunk_index}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> 'DSGeneratorCursor':
+        return cls(d["source_index"], d["chunk_index"])
+
 
 class TextDS2TokensGenerator:
     """
@@ -71,29 +181,53 @@ class TextDS2TokensGenerator:
 
         example usage:
 
-        s3_dataset = S3TextDataset(my_bucket_name, key_prefix)
+        s3_dataset = S3TextDataset(my_bucket_name, prefix=key_prefix)
         ds_dict = s3_dataset.train_test_split(test=0.05)
         ds_generator = TextDS2TokensGenerator(ds_dict["train"], my_tokenizer, text_field_name = "text", chunk_len = 4096, min_stride = 64, max_waste = 64)
 
         training_dataset = IterableDataset.from_generator(ds_generator, features=ds_generator.features())
 
-        
+
+        # or for restartable training
+        train_docs_dataset = S3TextDataset(my_bucket_name, dataset_id = '/datasets/BigTrainDS.json.gz')
+        saved_cursor_dict = json.load(open("saved_cursor.json", "r"))
+        saved_cursor = DSGeneratorCursor.from_dict(saved_cursor_dict)
+        ds_generator2 = TextDS2TokensGenerator(train_docs_dataset, my_tokenizer, text_field_name = "text", chunk_len = 4096, min_stride = 64, max_waste = 64, cursor = saved_cursor)
+        training_dataset2 = IterableDataset.from_generator(ds_generator2, features=ds_generator.features())
+        do_some_training_and_checkpoint(training_dataset2)
+        cursor = ds_generator2.get_cursor()
+        json.dump(cursor.to_dict(), open("saved_cursor.json", "w"))
+
+
     """
     construction_dataset: Dataset|IterableDataset
-    source_dataset: Iterator[DSItem]
+    source_dataset: Dataset|AddressableWrapOfIterableDataset
     base_tokenizer: PreTrainedTokenizerFast
-    text_field_name: str 
+    text_field_name: str
     chunk_len: int
     min_stride: int
     max_waste: int
     include_all_keys: bool
-    _current_item_generator:Iterator[DSItem]|None
+    max_rewind: int
+    _cursor: DSGeneratorCursor
+    _current_item_chunks: list[DSItem]|None
 
-    def __init__(self,source_dataset: Dataset|IterableDataset, base_tokenizer: PreTrainedTokenizerFast, text_field_name: str = "text", chunk_len: int = 4096, min_stride: int = 64, max_waste: int = 64, verbose: bool = False, include_all_keys: bool = False) -> None:
+    def __init__(self,
+                 source_dataset: Dataset|IterableDataset,
+                 base_tokenizer: PreTrainedTokenizerFast,
+                 text_field_name: str = "text",
+                 chunk_len: int = 4096,
+                 min_stride: int = 64,
+                 max_waste: int = 64,
+                 verbose: bool = False,
+                 include_all_keys: bool = False,
+                 max_rewind: int = 1024
+                 ) -> None:
+
         assert min_stride < chunk_len
+
         self.construction_dataset = source_dataset
-        self.source_dataset = cast(Iterator[DSItem],self.construction_dataset) if isinstance(self.construction_dataset, IterableDataset) else dataset_to_iterable(self.construction_dataset)
-        #self.source_dataset = cast(Iterator[DSItem],self.construction_dataset)
+        self.max_rewind = max_rewind
         self.base_tokenizer = base_tokenizer
         self.text_field_name = text_field_name
         self.chunk_len = chunk_len
@@ -101,7 +235,28 @@ class TextDS2TokensGenerator:
         self.max_waste = max_waste
         self.verbose = verbose
         self.include_all_keys = include_all_keys
-        self._current_item_generator = None
+        if isinstance(source_dataset, IterableDataset):
+            self.source_dataset = AddressableWrapOfIterableDataset(source_dataset, max_rewind = self.max_rewind)
+        else:
+            self.source_dataset = source_dataset
+
+        self._cursor = DSGeneratorCursor(0,0)
+        self._current_item_chunks = None
+        self.set_cursor(self._cursor)
+        assert self._current_item_chunks
+
+    def set_cursor(self, cursor: DSGeneratorCursor):
+        if not (self._current_item_chunks and self._cursor.source_index == cursor.source_index):
+            self._get_source_item_at(cursor.source_index)
+        assert self._current_item_chunks and self._cursor.source_index == cursor.source_index
+        if cursor.chunk_index >= len(self._current_item_chunks):
+            raise IndexError(f"cursor {cursor.to_dict().__repr__()} addresses chunk out of range for item with {len(self._current_item_chunks)} chunks")
+        else:
+            self._cursor.chunk_index = cursor.chunk_index
+
+
+    def get_cursor(self) -> DSGeneratorCursor:
+        return self._cursor
 
     def _features_dict(self, force:bool = False) -> dict[str,Any]:
         if self.include_all_keys and not force:
@@ -116,7 +271,7 @@ class TextDS2TokensGenerator:
         fd = self._features_dict(force)
         return Features(fd)
 
-    def yield_tokenized_chunks_from_text_item(self, text_item: DSItem) -> Iterator[DSItem]:
+    def tokenized_chunks_from_text_item(self, text_item: DSItem) -> list[DSItem]:
         text: str = text_item[self.text_field_name]
         #print(f"text_item keys: {text_item.keys()}")
               # {text_item['key']}")
@@ -136,6 +291,7 @@ class TextDS2TokensGenerator:
             optimal_step_size: float = TextDS2TokensGenerator.calculate_optimal_step_size(num_tokens, self.chunk_len, self.min_stride, self.max_waste)
             slices = TextDS2TokensGenerator.calculate_slices(num_tokens, self.chunk_len, optimal_step_size)
         slice_index = 0
+        tokenized_chunks:list[DSItem] = []
         for chunk_slice in slices:
             generated_item:DSItem = DSItem({"input_ids":None})
             for k,v in tokens.items():
@@ -149,15 +305,14 @@ class TextDS2TokensGenerator:
             if self.include_all_keys:
                 # Also include all members of the original text dataset item except for the text
                 for k,v in text_item.items():
-                    #print(f"in yield_tokenized_chunks_from_text_item: considering duplication of key '{k}'")
+                    #print(f"in tokenized_chunks_from_text_item: considering duplication of key '{k}'")
                     if not ( k in generated_item or k == self.text_field_name):
-                        #print(f"in yield_tokenized_chunks_from_text_item: duplicating key '{k}' with value '{v}'")
+                        #print(f"in tokenized_chunks_from_text_item: duplicating key '{k}' with value '{v}'")
                         generated_item[k] = v
             generated_item["slice_index"] = slice_index
-            if self.verbose:
-                print(f"yielding generated_item {generated_item.__repr__()}")
-            yield generated_item
+            tokenized_chunks.append(generated_item)
             slice_index+=1
+        return tokenized_chunks
 
     # Need a callable form to make huggingface Dataset.from_generator(me) happy
     def __call__(self):
@@ -166,26 +321,38 @@ class TextDS2TokensGenerator:
             yield(x)
 
     def __iter__(self):
-        self._current_item_generator=None
         return self
 
-    def _get_next_source_item(self):
+    def _get_source_item_at(self, index: int):
         #print(f"source_dataset: {self.source_dataset.__repr__()}")
-        source_item:Any = next(self.source_dataset)
-        current_source_item = cast(DSItem,source_item)
+        if index < 0:
+            raise IndexError
+        item = cast(DSItem, self.source_dataset[index] )
+
+        assert isinstance(item[self.text_field_name], str)
+
+        item_chunks = self.tokenized_chunks_from_text_item(item)
+        self._cursor = DSGeneratorCursor(index,0)
+        self._current_item_chunks = item_chunks
         #print(f"current_source_item keys: {current_source_item.keys()}")
-        assert isinstance(current_source_item[self.text_field_name], str)
-        self._current_item_generator = self.yield_tokenized_chunks_from_text_item(current_source_item)
 
     def __next__(self) -> DSItem:
+        assert self._current_item_chunks
+        assert len(self._current_item_chunks) > 0
         while True:
-            if not self._current_item_generator:
-                self._get_next_source_item() # automatically raises StopIteration if exhausted
-            try:
-                item = next(cast(Iterator[DSItem],self._current_item_generator))
-                return item
-            except StopIteration:
-                self._current_item_generator = None
+            while self._cursor.chunk_index >= len(self._current_item_chunks):
+                new_source_index = self._cursor.source_index+1
+                try:
+                    self._get_source_item_at(new_source_index)
+                    assert self._cursor.source_index == new_source_index
+                    assert self._cursor.chunk_index == 0
+                except IndexError:
+                    # print(f"setting cursor to {new_source_index},0 at end of iteration")
+                    self._cursor = DSGeneratorCursor(new_source_index,0)
+                    raise StopIteration
+            item = self._current_item_chunks[self._cursor.chunk_index]
+            self._cursor.incr_chunk_index()
+            return item
 
     @staticmethod
     def  calculate_optimal_step_size(num_tokens: int, chunk_len: int, min_stride: int, max_waste: int) -> float:
@@ -207,7 +374,7 @@ class TextDS2TokensGenerator:
             optimal_stride = 1.0*min_stride
         optimal_step_size:float =  chunk_len - optimal_stride
         return optimal_step_size
-        
+
     @staticmethod
     def calculate_slices(num_tokens: int, chunk_len: int, optimal_step_size: float) -> List[slice]:
         slices: List[slice] = []
@@ -224,7 +391,7 @@ class TextDS2TokensGenerator:
             offset += optimal_step_size
         return slices
 
-    # custom pickling methods to enable fingerprinting for Dataset.with_transform() compatibility 
+    # custom pickling methods to enable fingerprinting for Dataset.with_transform() compatibility
     # No pickling/unpickling will actually ever be desired, just a signature to detect changes
     @classmethod
     def _reconstruct(cls, args, checksum):
@@ -239,7 +406,7 @@ class TextDS2TokensGenerator:
             In addition to the args used to initialize the instance, there is a checksum
             of the source code included to reduce debugging insanity.
         """
-        constructor_args = (self.construction_dataset, self.base_tokenizer, self.text_field_name, self.chunk_len, self.min_stride, self.max_waste, self.verbose)
+        constructor_args = (self.construction_dataset, self.base_tokenizer, self.text_field_name, self.chunk_len, self.min_stride, self.max_waste, self.verbose, self.max_rewind)
         cls = self.__class__
         # F-You huggingface Dataset caching!
         return (cls._reconstruct, (cls, constructor_args, MODULE_CHECKSUM))
