@@ -6,7 +6,7 @@ import copy
 
 sys.path.insert(0,os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
-from tokengenerators import (DSItem, TextDS2TokensGenerator, AddressableWrapOfIterableDataset)
+from tokengenerators import DSItem, TextDS2TokensGenerator, AddressableWrapOfIterableDataset, DSGeneratorCursor
 from typing import cast, Any
 from transformers import PreTrainedTokenizerFast, AutoTokenizer
 import datasets
@@ -327,4 +327,86 @@ def test_text_ds_2_tokens_get_cursor_with_iterable_ds(multiple_text_item_dataset
     assert cursor and cursor.source_index == len(multiple_text_item_dataset)
     expected_num_items = 83 if use_ascii_tokenizer  else 26
     assert num_items  == expected_num_items
+
+def test_set_cursor(multiple_text_item_dataset) -> None:
+    import torch
+
+    chunk_len=4096
+    min_stride = 64
+    max_waste = 64
+
+    generator:TextDS2TokensGenerator = TextDS2TokensGenerator(multiple_text_item_dataset, tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste)
+
+
+    # print(f"original cursor {generator.get_cursor().to_dict().__repr__()}")
+    tokens_ds= datasets.IterableDataset.from_generator(generator)
+    #print(f"after creating dataset {generator.get_cursor().to_dict().__repr__()}")
+
+    items_at_cursors: list[tuple] = []
+    cursor:DSGeneratorCursor = generator.get_cursor()
+    prev_cursor:DSGeneratorCursor|None = None
+    num_items:int = 0
+    for ds_item in tokens_ds:
+        # print(f"item at cursor {cursor.to_dict().__repr__()}")
+        assert ds_item
+        num_items += 1
+        items_at_cursors.append((cursor, ds_item))
+        # print(f"num_items is {num_items}, cursor is {cursor.to_dict().__repr__()} prev_cursor is {prev_cursor.__repr__()}")
+        cursor = generator.get_cursor()
+        if prev_cursor:
+            assert cursor > prev_cursor
+        prev_cursor =  copy.deepcopy(cursor)
+
+    generator2:TextDS2TokensGenerator = TextDS2TokensGenerator(multiple_text_item_dataset, tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste)
+    for (cursor, ds_item) in reversed(items_at_cursors):
+        # print(f"about to set cursor to {cursor.to_dict().__repr__()}")
+        generator2.set_cursor(cursor)
+        item_at_cursor = next(iter(generator2))
+        # print(item_at_cursor.keys());
+        assert torch.allclose(item_at_cursor["input_ids"], ds_item["input_ids"])
+
+def test_set_cursor_with_iterable_source(multiple_text_item_dataset) -> None:
+    import torch
+
+    chunk_len=4096
+    min_stride = 64
+    max_waste = 64
+
+    iterable_ds:datasets.IterableDataset = multiple_text_item_dataset.to_iterable_dataset()
+
+    chunk_len=4096
+    min_stride = 64
+    max_waste = 64
+
+    generator:TextDS2TokensGenerator = TextDS2TokensGenerator(iterable_ds, tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste)
+    tokens_ds= datasets.IterableDataset.from_generator(generator)
+
+
+    # print(f"original cursor {generator.get_cursor().to_dict().__repr__()}")
+    tokens_ds= datasets.IterableDataset.from_generator(generator)
+    #print(f"after creating dataset {generator.get_cursor().to_dict().__repr__()}")
+
+    items_at_cursors: list[tuple] = []
+    cursor:DSGeneratorCursor = generator.get_cursor()
+    prev_cursor:DSGeneratorCursor|None = None
+    num_items:int = 0
+    for ds_item in tokens_ds:
+        # print(f"item at cursor {cursor.to_dict().__repr__()}")
+        assert ds_item
+        num_items += 1
+        items_at_cursors.append((cursor, ds_item))
+        # print(f"num_items is {num_items}, cursor is {cursor.to_dict().__repr__()} prev_cursor is {prev_cursor.__repr__()}")
+        cursor = generator.get_cursor()
+        if prev_cursor:
+            assert cursor > prev_cursor
+        prev_cursor =  copy.deepcopy(cursor)
+
+    iterable_ds2:datasets.IterableDataset = multiple_text_item_dataset.to_iterable_dataset()
+    generator2:TextDS2TokensGenerator = TextDS2TokensGenerator(iterable_ds2, tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste)
+    for (cursor, ds_item) in reversed(items_at_cursors):
+        # print(f"about to set cursor to {cursor.to_dict().__repr__()}")
+        generator2.set_cursor(cursor)
+        item_at_cursor = next(iter(generator2))
+        # print(item_at_cursor.keys());
+        assert torch.allclose(item_at_cursor["input_ids"], ds_item["input_ids"])
 

@@ -7,8 +7,6 @@ import copy
 
 """ work status:
 
-- Need to test cursor setting
-
 - Need to add and test estimate_available_chunks()
 
 """
@@ -263,17 +261,29 @@ class TextDS2TokensGenerator:
         self.set_cursor(DSGeneratorCursor(0,0))
 
     def set_cursor(self, new_cursor: DSGeneratorCursor):
-        if not (self._current_item_chunks and self._cursor and self._cursor.source_index == new_cursor.source_index):
-            item_chunks = self._get_item_chunks_at(new_cursor.source_index)
+        if self._current_item_chunks and self._cursor and self._cursor.source_index == new_cursor.source_index:
+            # print(f"using existing item_chunks at {new_cursor.source_index}")
+            item_chunks = self._current_item_chunks
+        else:
+            # print(f"loading item_chunks at {new_cursor.source_index}")
+            item_chunks = self._get_item_chunks_at(new_cursor.source_index) # this may raise IndexError depending on source_index
         if new_cursor.chunk_index >= len(item_chunks):
             raise IndexError(f"cursor {new_cursor.to_dict().__repr__()} addresses chunk out of range for item with {len(item_chunks)} chunks")
         else:
             self._current_item_chunks = item_chunks
             self._cursor = copy.deepcopy(new_cursor)
 
+    def _advance_cursor_without_read(self, loaded_chunks_len:int) -> None:
+        assert self._current_item_chunks and self._cursor
+        next_cursor:DSGeneratorCursor = copy.deepcopy(self._cursor)
+        next_cursor.incr(chunk_limit = loaded_chunks_len)
+        if not next_cursor.source_index == self._cursor.source_index:
+            self._current_item_chunks = None
+        self._cursor = next_cursor
+
 
     def get_cursor(self) -> DSGeneratorCursor:
-        return self._cursor
+        return copy.deepcopy(self._cursor)
 
     def _features_dict(self, force:bool = False) -> dict[str,Any]:
         if self.include_all_keys and not force:
@@ -364,22 +374,16 @@ class TextDS2TokensGenerator:
     def __next__(self) -> DSItem:
         if not self._cursor:
             self._cursor = DSGeneratorCursor(0,0)
-        if not self._current_item_chunks:
-            self._current_item_chunks = self._get_item_chunks_at(self._cursor.source_index)
+            self._current_item_chunks = None # force a reload of self._current_item_chunks below
         while True:
-            while not (self._current_item_chunks and self._cursor.chunk_index < len(self._current_item_chunks)):
-                new_source_index = self._cursor.source_index+1
-                try:
-                    self._current_item_chunks = self._get_item_chunks_at(new_source_index)
-                    self._cursor = DSGeneratorCursor(new_source_index,0)
-                except IndexError:
-                    self._current_item_chunks = None
-                    #print(f"setting cursor to {new_source_index},0 at end of iteration")
-                    self._cursor = DSGeneratorCursor(new_source_index,0)
-                    raise StopIteration
-            assert self._current_item_chunks and self._cursor and self._cursor.chunk_index < len(self._current_item_chunks)
-            item = self._current_item_chunks[self._cursor.chunk_index]
-            self._cursor.chunk_index += 1
+            try:
+                self.set_cursor(self._cursor) # ensure _current_item_chunks is populated and range checks are made
+                assert self._current_item_chunks
+                item = self._current_item_chunks[self._cursor.chunk_index]
+                self._advance_cursor_without_read(len(self._current_item_chunks))
+            except IndexError:
+                raise StopIteration
+            assert self._cursor
             return item
 
     @staticmethod
