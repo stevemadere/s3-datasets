@@ -6,7 +6,7 @@ import copy
 
 sys.path.insert(0,os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
-from tokengenerators import (DSItem, TextDS2TokensGenerator)
+from tokengenerators import (DSItem, TextDS2TokensGenerator, AddressableWrapOfIterableDataset)
 from typing import cast, Any
 from transformers import PreTrainedTokenizerFast, AutoTokenizer
 import datasets
@@ -275,10 +275,53 @@ def test_text_ds_2_tokens_get_cursor(multiple_text_item_dataset) -> None:
         cursor = generator.get_cursor()
         # print(f"num_items is {num_items}, cursor is {cursor.to_dict().__repr__()} prev_cursor is {prev_cursor.__repr__()}")
         if prev_cursor:
-            if cursor.source_index == prev_cursor.source_index:
-                assert cursor.chunk_index > prev_cursor.chunk_index
-            else:
-                assert cursor.source_index > prev_cursor.source_index
+            assert cursor > prev_cursor
+        prev_cursor =  copy.deepcopy(cursor)
+    cursor = generator.get_cursor()
+    assert cursor and cursor.source_index == len(multiple_text_item_dataset)
+    expected_num_items = 83 if use_ascii_tokenizer  else 26
+    assert num_items  == expected_num_items
+
+def test_addressable_wrap_of_iterable_dataset(multiple_text_item_dataset) -> None:
+    text_items = []
+    for i in range(len(multiple_text_item_dataset)):
+        text_items.append(multiple_text_item_dataset[i]['text'])
+
+    iterable_ds:datasets.IterableDataset = multiple_text_item_dataset.to_iterable_dataset()
+
+    addressable_wrap = AddressableWrapOfIterableDataset(iterable_ds)
+    for n in range(len(multiple_text_item_dataset)):
+        item = addressable_wrap[n]
+        assert item
+        assert item['text']
+        assert len(item['text']) == len(text_items[n])
+        assert item['text'] == text_items[n]
+
+
+def test_text_ds_2_tokens_get_cursor_with_iterable_ds(multiple_text_item_dataset) -> None:
+    text_items = []
+    for i in range(len(multiple_text_item_dataset)):
+        text_items.append(multiple_text_item_dataset[i]['text'])
+
+    iterable_ds:datasets.IterableDataset = multiple_text_item_dataset.to_iterable_dataset()
+
+    chunk_len=4096
+    min_stride = 64
+    max_waste = 64
+
+    generator:TextDS2TokensGenerator = TextDS2TokensGenerator(iterable_ds, tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste)
+    tokens_ds= datasets.IterableDataset.from_generator(generator)
+
+    cursor = None
+    prev_cursor = None
+    num_items:int = 0
+    for ds_item in tokens_ds:
+        assert ds_item
+        num_items += 1
+        cursor = generator.get_cursor()
+        # print(f"num_items is {num_items}, cursor is {cursor.to_dict().__repr__()} prev_cursor is {prev_cursor.__repr__()}")
+        if prev_cursor:
+            assert cursor > prev_cursor
         prev_cursor =  copy.deepcopy(cursor)
     cursor = generator.get_cursor()
     assert cursor and cursor.source_index == len(multiple_text_item_dataset)

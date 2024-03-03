@@ -7,12 +7,7 @@ import copy
 
 """ work status:
 
-- Need to add and test ability to get and set a cursor.
-Setting the cursor will necessitate either passing it to the constructor or re-initializing source_dataset
-
-Check to see if construction_dataset responds to set_cursor and get_cursor with this pattern:
-if hasattr(obj, 'the_method') and callable(getattr(obj, 'the_method')):
-    obj.the_method()
+- Need to test cursor setting
 
 - Need to add and test estimate_available_chunks()
 
@@ -64,14 +59,15 @@ class RewindBuffer:
     """ Holds a limited cache of dataset items preceding the cursor to allow for a some
         rewind capacity in otherwise unindexable IterableDataset instances.
     """
-    past_items:List
+    past_items: list
     max_size: int
     index_offset:int
 
-    def __init__(self, max_size) -> None:
+    def __init__(self, max_size: int) -> None:
+        assert max_size > 0
         self.past_items = []
         self.max_size = max_size
-        self.index_offset = 1
+        self.index_offset = 0
 
     def add(self, item: Any) -> None:
         self.past_items.append(item)
@@ -99,12 +95,12 @@ class AddressableWrapOfIterableDataset:
         range prior to the current iteration.  Uses forward scanning to
         address after the current iteration.
     """
-    source_dataset:IterableDataset
+    source_iterator: Iterator
     max_rewind:int
     rewind_buffer: RewindBuffer
 
     def __init__(self, iterable_dataset: IterableDataset, max_rewind = 1024):
-        self.source_dataset = iterable_dataset
+        self.source_iterator = iter(iterable_dataset)
         self.rewind_buffer = RewindBuffer(max_rewind)
 
     # brackets operator
@@ -112,21 +108,22 @@ class AddressableWrapOfIterableDataset:
         if self.rewind_buffer.contains(index):
             return self.rewind_buffer.get(index)
         buffer_range = self.rewind_buffer.current_range()
-        if buffer_range[0] < index:
+        if index < buffer_range[0]:
             raise ValueError("index preceeds maximum rewind")
 
-        items_to_skip = index - buffer_range[1]
-        assert items_to_skip >= 0
+        items_to_skip = (index - buffer_range[1])+1
+        assert items_to_skip > 0
 
         item:DSItem|None = None
         while items_to_skip > 0:
             try:
-                item =  cast(DSItem,next(iter(self.source_dataset)))
+                item =  cast(DSItem,next(self.source_iterator))
+                #print(f"retrieving item  of len {len(item['text'])} ")
             except StopIteration:
                 raise IndexError
             self.rewind_buffer.add(item)
             items_to_skip -= 1
-        assert item != None
+        assert not item == None
         return item
 
 
@@ -262,13 +259,11 @@ class TextDS2TokensGenerator:
         else:
             self.source_dataset = source_dataset
 
-        self._cursor = DSGeneratorCursor(0,0)
         self._current_item_chunks = None
-        self.set_cursor(self._cursor)
-        assert self._current_item_chunks
+        self.set_cursor(DSGeneratorCursor(0,0))
 
     def set_cursor(self, new_cursor: DSGeneratorCursor):
-        if not (self._current_item_chunks and self._cursor.source_index == new_cursor.source_index):
+        if not (self._current_item_chunks and self._cursor and self._cursor.source_index == new_cursor.source_index):
             item_chunks = self._get_item_chunks_at(new_cursor.source_index)
         if new_cursor.chunk_index >= len(item_chunks):
             raise IndexError(f"cursor {new_cursor.to_dict().__repr__()} addresses chunk out of range for item with {len(item_chunks)} chunks")
