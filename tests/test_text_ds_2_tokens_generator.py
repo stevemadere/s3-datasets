@@ -410,3 +410,22 @@ def test_set_cursor_with_iterable_source(multiple_text_item_dataset) -> None:
         # print(item_at_cursor.keys());
         assert torch.allclose(item_at_cursor["input_ids"], ds_item["input_ids"])
 
+
+def skip_test_estimate_available_chunks(multiple_text_item_dataset) -> None:
+    assert multiple_text_item_dataset and False
+
+
+def test_ds_generator_cursor_save_and_load() -> None:
+    import random
+    import tempfile
+    import os
+    original_cursor = DSGeneratorCursor(source_index=random.randint(1,1000), chunk_index= random.randint(0,7))
+    # make this a safe temp file name that will be auto-deleted when the process exits
+    with tempfile.NamedTemporaryFile(mode='w',delete=True) as tf:
+        cursor_file_path =  tf.name
+        original_cursor.save_to_file_path(cursor_file_path)
+        assert os.path.exists(cursor_file_path)
+        restored_cursor = DSGeneratorCursor.from_file_path(cursor_file_path)
+    assert not os.path.exists(cursor_file_path)
+    assert restored_cursor == original_cursor
+

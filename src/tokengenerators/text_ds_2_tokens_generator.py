@@ -4,6 +4,8 @@ from datasets import Dataset, IterableDataset, Features, Sequence, Value
 from typing import NewType, Dict, List, Any, Iterator, cast
 from functools import total_ordering
 import copy
+import typedjson
+
 
 """ work status:
 
@@ -179,9 +181,30 @@ class DSGeneratorCursor:
     def to_dict(self) -> dict[str,int]:
         return {"source_index": self.source_index, "chunk_index": self.chunk_index}
 
+    def save_to_file_path(self, file_path:str) -> None:
+        json_string = typedjson.class_instance_to_json(self)
+        with open(file_path, "w") as f:
+            f.write(json_string)
+
     @classmethod
     def from_dict(cls, d: dict[str,int]) -> 'DSGeneratorCursor':
         return cls(source_index=d["source_index"], chunk_index = d["chunk_index"])
+
+    @classmethod
+    def from_file_path(cls, file_path:str) -> 'DSGeneratorCursor':
+        """
+        deserialized_thing = json.load(open(file_path, "r"))
+        # let's get pydantic, shall we?
+        if (isinstance(deserialized_thing, dict) and
+                all(isinstance(key,str) and isinstance(value,int) for key,value in deserialized_thing.items())):
+            cursor_dict = cast(dict[str,int], deserialized_thing)
+            return cls.from_dict(cursor_dict)
+        else:
+            raise ValueError("object in cursor file must be of type dict[str,int]")
+        """
+        with open(file_path, "r") as f:
+            instance = typedjson.class_instance_from_json(cls, f.read())
+        return instance
 
 
 class TextDS2TokensGenerator:
@@ -260,7 +283,48 @@ class TextDS2TokensGenerator:
         self._current_item_chunks = None
         self.set_cursor(DSGeneratorCursor(0,0))
 
+    def get_cursor(self) -> DSGeneratorCursor:
+        """
+        Gets the generator's cursor that can be used later to return it to the
+        generation state where it currently is.
+
+        This is can be useful when resuming a training process after a crash or
+        intentional pause.  e.g.  When your spot-market cloud GPU gets yanked and
+        you subsequently want to resume from your most recent checkpoint.
+
+        usage:
+        # before a crash
+        training_dataset = IterableDataset.from_generator(my_generator)
+        do_some_training_and_make_a_checkpoint(my_model, training_dataset)
+        cursor = my_generator.get_cursor()
+        save_cursor_to_checkpoint(cursor)
+
+        # resuming training after a crash
+        pre_crash_cursor = get_cursor_from_checpoint()
+        my_generator.set_cursor(pre_crash_cursor)
+        training_dataset = IterableDataset.from_generator(my_generator)
+        do_some_training_from_checkpoint_and_checkpoint_again(training_dataset)
+        cursor = my_generator.get_cursor()
+        save_cursor_to_checkpoint(cursor)
+        # ad infinitum
+        """
+        cursor_copy = copy.deepcopy(self._cursor) # ensure the caller can't mess up my internal state with mods to the cursor
+        return cursor_copy
+
     def set_cursor(self, new_cursor: DSGeneratorCursor):
+        """
+        Sets the generator's cursor to allow for resumption of generation from a previously recorded state.
+
+        The cursor should only be a value that was previously returned by a call to
+        get_cursor() on an equivalent generator.
+
+        Confirms that the cursor is valid by retrieving the source data item, tokenizing it,
+        and splitting into chunks of tokens.  If the cursor is invalid, an IndexError will
+        be raised.
+
+        see get_cursor() documentation for rationale and example usage.
+
+        """
         if self._current_item_chunks and self._cursor and self._cursor.source_index == new_cursor.source_index:
             # print(f"using existing item_chunks at {new_cursor.source_index}")
             item_chunks = self._current_item_chunks
@@ -272,27 +336,6 @@ class TextDS2TokensGenerator:
         else:
             self._current_item_chunks = item_chunks
             self._cursor = copy.deepcopy(new_cursor)
-
-    def _advance_cursor_without_read(self, loaded_chunks_len:int) -> None:
-        assert self._current_item_chunks and self._cursor
-        next_cursor:DSGeneratorCursor = copy.deepcopy(self._cursor)
-        next_cursor.incr(chunk_limit = loaded_chunks_len)
-        if not next_cursor.source_index == self._cursor.source_index:
-            self._current_item_chunks = None
-        self._cursor = next_cursor
-
-
-    def get_cursor(self) -> DSGeneratorCursor:
-        return copy.deepcopy(self._cursor)
-
-    def _features_dict(self, force:bool = False) -> dict[str,Any]:
-        if self.include_all_keys and not force:
-            raise RuntimeError(f"Cannot predict the features that will be returned from {self.__class__} when include_all_keys option is enabled")
-        fd: dict[str, Any] = { "slice_index": Value("int64") }
-        tokenizer_output_fields = ['input_ids', 'labels', 'attention_mask']
-        for field_name in tokenizer_output_fields:
-            fd[field_name] = Sequence(feature= Value("int64"), length = self.chunk_len)
-        return fd
 
     def features(self, force: bool = False) -> Features:
         """ Generate a Features object suitable for passing to IterableDataset.from_generator().
@@ -309,6 +352,24 @@ class TextDS2TokensGenerator:
         """
         fd = self._features_dict(force)
         return Features(fd)
+
+    def _advance_cursor_without_read(self, loaded_chunks_len:int) -> None:
+        assert self._current_item_chunks and self._cursor
+        next_cursor:DSGeneratorCursor = copy.deepcopy(self._cursor)
+        next_cursor.incr(chunk_limit = loaded_chunks_len)
+        if not next_cursor.source_index == self._cursor.source_index:
+            self._current_item_chunks = None
+        self._cursor = next_cursor
+
+
+    def _features_dict(self, force:bool = False) -> dict[str,Any]:
+        if self.include_all_keys and not force:
+            raise RuntimeError(f"Cannot predict the features that will be returned from {self.__class__} when include_all_keys option is enabled")
+        fd: dict[str, Any] = { "slice_index": Value("int64") }
+        tokenizer_output_fields = ['input_ids', 'labels', 'attention_mask']
+        for field_name in tokenizer_output_fields:
+            fd[field_name] = Sequence(feature= Value("int64"), length = self.chunk_len)
+        return fd
 
     def _tokenized_chunks_from_text_item(self, text_item: DSItem) -> list[DSItem]:
         text: str = text_item[self.text_field_name]
