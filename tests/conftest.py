@@ -5,6 +5,13 @@ import json
 from moto import mock_s3
 import datasets
 import boto3
+import dotenv
+
+
+def pytest_configure():
+    dotenv.load_dotenv()
+    #print("loaded env and now it has these:")
+    #print(os.environ.__repr__())
 
 my_dirname:str = os.path.dirname(__file__)
 fixture_dir=f"{my_dirname}/fixtures"

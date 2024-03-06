@@ -112,10 +112,12 @@ class ASCIITokenizer:
 my_dirname:str = os.path.dirname(__file__)
 huggingface_model_path=f"{my_dirname}/../../vastai/huggingface/Mistral-7B-v0.1"
 
-use_ascii_tokenizer = False if os.path.exists(huggingface_model_path+'/tokenizer.json')  else True
+ascii_tokenizer:PreTrainedTokenizerFast = cast(PreTrainedTokenizerFast,ASCIITokenizer())
+
+use_ascii_tokenizer = True # False if os.path.exists(huggingface_model_path+'/tokenizer.json')  else True
 
 tokenizer: PreTrainedTokenizerFast= \
-    cast(PreTrainedTokenizerFast,ASCIITokenizer()) if use_ascii_tokenizer \
+    ascii_tokenizer if use_ascii_tokenizer \
     else AutoTokenizer.from_pretrained(huggingface_model_path, use_fast=True)
 
 tokenizer.pad_token = tokenizer.eos_token
@@ -411,8 +413,68 @@ def test_set_cursor_with_iterable_source(multiple_text_item_dataset) -> None:
         assert torch.allclose(item_at_cursor["input_ids"], ds_item["input_ids"])
 
 
-def skip_test_estimate_available_chunks(multiple_text_item_dataset) -> None:
-    assert multiple_text_item_dataset and False
+def test_estimate_available_chunks_smoke(multiple_text_item_dataset) -> None:
+    chunk_len=4096
+    min_stride = 64
+    max_waste = 64
+
+    generator:TextDS2TokensGenerator = TextDS2TokensGenerator(multiple_text_item_dataset, tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste)
+
+    max_relative_uncertainty = 0.1
+    allowable_slop = 0.5
+    (chunks_estimate, uncertainty) = generator.estimate_available_chunks(max_relative_uncertainty = max_relative_uncertainty)
+
+    assert chunks_estimate
+    print(f"uncertainty returned was {uncertainty}")
+
+    actual_number_of_chunks = len(list(generator))
+
+    ridiculously_low_estimate = 0
+    ridiculously_high_estimate = actual_number_of_chunks * 2
+    assert chunks_estimate > ridiculously_low_estimate
+    assert chunks_estimate < ridiculously_high_estimate
+
+    excessively_high_estimate = actual_number_of_chunks * (1.0+max_relative_uncertainty*(1.0+allowable_slop))
+    excessively_low_estimate = actual_number_of_chunks * (1.0-max_relative_uncertainty*(1.0+allowable_slop))
+    assert chunks_estimate > excessively_low_estimate
+    assert chunks_estimate < excessively_high_estimate
+
+if os.environ['S3_TEXT_DATASET_BUCKET']:
+
+    def test_estimate_available_chunks_real_world() -> None:
+        from s3datasets import S3TextDataset
+
+        chunk_len=4096
+        min_stride = 64
+        max_waste = 64
+        bucket_name = os.environ['S3_TEXT_DATASET_BUCKET']
+        bucket_prefix = os.environ.get('S3_TEXT_DATASET_PREFIX','')
+
+        large_text_ds = S3TextDataset.from_bucket(bucket_name, prefix=bucket_prefix)
+        num_texts = len(large_text_ds)
+
+        generator:TextDS2TokensGenerator = TextDS2TokensGenerator(large_text_ds, ascii_tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste)
+
+        max_relative_uncertainty = 0.1
+        allowable_slop = 0.5
+        (chunks_estimate, uncertainty) = generator.estimate_available_chunks(max_relative_uncertainty = max_relative_uncertainty)
+
+        assert chunks_estimate
+        print(f"chunks_estimate and uncertainty returned was ({chunks_estimate}, {uncertainty})")
+
+
+        reasonable_chunks_per_text = 17.7
+        reasonable_num_chunks = reasonable_chunks_per_text * num_texts
+
+        ridiculously_low_estimate = 0
+        ridiculously_high_estimate = reasonable_num_chunks * 2
+        assert chunks_estimate > ridiculously_low_estimate
+        assert chunks_estimate < ridiculously_high_estimate
+
+        excessively_high_estimate = reasonable_num_chunks * (1.0+max_relative_uncertainty*(1.0+allowable_slop))
+        excessively_low_estimate = reasonable_num_chunks * (1.0-max_relative_uncertainty*(1.0+allowable_slop))
+        assert chunks_estimate > excessively_low_estimate
+        assert chunks_estimate < excessively_high_estimate
 
 
 def test_ds_generator_cursor_save_and_load() -> None:

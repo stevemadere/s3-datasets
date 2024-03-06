@@ -7,13 +7,6 @@ import copy
 import typedjson
 
 
-""" work status:
-
-- Need to add and test estimate_available_chunks()
-
-"""
-
-
 # Why do I need a checksum of my module source code? you may ask.
 #  Well, let me tell you a story of hair-pulling insanity during debugging when
 #  huggingface Dataset decides to cache the implementation of my class
@@ -352,6 +345,53 @@ class TextDS2TokensGenerator:
         """
         fd = self._features_dict(force)
         return Features(fd)
+
+    def estimate_available_chunks(self,
+                                  max_relative_uncertainty: float|None =None,
+                                  max_uncertainty:int|None = None) -> tuple[int|None,float]:
+        import numpy as np
+
+        if max_relative_uncertainty and max_uncertainty:
+            raise ValueError("at most, one of max_relative_uncertainty and max_uncertainty can be specified")
+
+        if isinstance(self.construction_dataset,Dataset):
+            finite_dataset: Dataset = cast(Dataset, self.construction_dataset)
+        else:
+            raise TypeError("This generator is sourced from an IterableDataset.  Since its size cannot be known, no estimate can be made of the chunks available from it")
+
+        source_dataset_size = len(finite_dataset)
+        relative_uncertainty:float = 1.0
+        uncertainty = max_uncertainty+1.0 if max_uncertainty else 2.0e9
+        min_samples = 10
+        sample_sum = 0
+        samples = []
+        estimated_mean:None|float = None
+        for sample_position in range(source_dataset_size):
+            if sample_position > min_samples and (
+                 (max_relative_uncertainty and relative_uncertainty < max_relative_uncertainty) or
+                 (max_uncertainty and uncertainty < max_uncertainty)):
+                break
+            chunks = self._get_item_chunks_at(sample_position)
+            sample = len(chunks)
+            print(f"sample #{sample_position} : {sample}")
+            samples.append(sample)
+            sample_sum += sample
+            sample_size:float = float(len(samples))
+            uncertainty:float = 0.0
+            if sample_position > 5:
+                sample_std = np.std(samples,ddof=1)
+                uncertainty =  float(sample_std) * float(np.sqrt(sample_size))
+            estimated_mean = float(sample_sum) / sample_size
+            relative_uncertainty = uncertainty / sample_sum
+
+        estimated_chunks:int|None = None
+        if len(samples) >= source_dataset_size:
+            relative_uncertainty = 0.0
+            estimated_chunks = sample_sum
+        else:
+            estimated_chunks = int(estimated_mean*source_dataset_size) if estimated_mean else None
+        return (estimated_chunks, relative_uncertainty)
+
 
     def _advance_cursor_without_read(self, loaded_chunks_len:int) -> None:
         assert self._current_item_chunks and self._cursor
