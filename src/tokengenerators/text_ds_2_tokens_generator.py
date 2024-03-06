@@ -111,7 +111,6 @@ class AddressableWrapOfIterableDataset:
         while items_to_skip > 0:
             try:
                 item =  cast(DSItem,next(self.source_iterator))
-                #print(f"retrieving item  of len {len(item['text'])} ")
             except StopIteration:
                 raise IndexError
             self.rewind_buffer.add(item)
@@ -319,10 +318,12 @@ class TextDS2TokensGenerator:
 
         """
         if self._current_item_chunks and self._cursor and self._cursor.source_index == new_cursor.source_index:
-            # print(f"using existing item_chunks at {new_cursor.source_index}")
+            if self.verbose:
+                print(f"using existing item_chunks at {new_cursor.source_index}")
             item_chunks = self._current_item_chunks
         else:
-            # print(f"loading item_chunks at {new_cursor.source_index}")
+            if self.verbose:
+                print(f"loading item_chunks at {new_cursor.source_index}")
             item_chunks = self._get_item_chunks_at(new_cursor.source_index) # this may raise IndexError depending on source_index
         if new_cursor.chunk_index >= len(item_chunks):
             raise IndexError(f"cursor {new_cursor.to_dict().__repr__()} addresses chunk out of range for item with {len(item_chunks)} chunks")
@@ -373,16 +374,19 @@ class TextDS2TokensGenerator:
                 break
             chunks = self._get_item_chunks_at(sample_position)
             sample = len(chunks)
-            print(f"sample #{sample_position} : {sample}")
+            if self.verbose:
+                print(f"sample #{sample_position} : {sample}")
             samples.append(sample)
             sample_sum += sample
             sample_size:float = float(len(samples))
-            uncertainty:float = 0.0
+            uncertainty:float = sample_sum
             if sample_position > 5:
                 sample_std = np.std(samples,ddof=1)
                 uncertainty =  float(sample_std) * float(np.sqrt(sample_size))
             estimated_mean = float(sample_sum) / sample_size
             relative_uncertainty = uncertainty / sample_sum
+            if self.verbose:
+                print(f"estimated_mean: {estimated_mean}, relative_uncertainty {relative_uncertainty}")
 
         estimated_chunks:int|None = None
         if len(samples) >= source_dataset_size:
@@ -413,10 +417,7 @@ class TextDS2TokensGenerator:
 
     def _tokenized_chunks_from_text_item(self, text_item: DSItem) -> list[DSItem]:
         text: str = text_item[self.text_field_name]
-        #print(f"text_item keys: {text_item.keys()}")
-              # {text_item['key']}")
         tokens: BatchEncoding = self.base_tokenizer(text, max_length = 1024*1024*1024, return_length = True, truncation=True)
-        #print(f"tokens: {tokens.__repr__()}")
         # not sure why pyright is complaining about the following, ignore it
         num_tokens: int = tokens["length"][0] # type: ignore
         assert isinstance(num_tokens, int)
@@ -445,9 +446,7 @@ class TextDS2TokensGenerator:
             if self.include_all_keys:
                 # Also include all members of the original text dataset item except for the text
                 for k,v in text_item.items():
-                    #print(f"in tokenized_chunks_from_text_item: considering duplication of key '{k}'")
                     if not ( k in generated_item or k == self.text_field_name):
-                        #print(f"in tokenized_chunks_from_text_item: duplicating key '{k}' with value '{v}'")
                         generated_item[k] = v
             generated_item["slice_index"] = slice_index
             tokenized_chunks.append(generated_item)
@@ -464,7 +463,6 @@ class TextDS2TokensGenerator:
         return self
 
     def _get_item_chunks_at(self, index: int):
-        #print(f"source_dataset: {self.source_dataset.__repr__()}")
         if index < 0:
             raise IndexError
         item = cast(DSItem, self.source_dataset[index] )
@@ -496,13 +494,10 @@ class TextDS2TokensGenerator:
         remaining_tokens = num_tokens - chunk_len
         remaining_partitions: int = (((remaining_tokens-max_waste) -1)  // (chunk_len - min_stride) ) + 1
 
-        #print(f"remaining_partitions = {remaining_partitions}")
 
         # After the first chunk is laid down, determine what is left to cover by remaining chunks and allocate it
         ideal_partition_len: float = remaining_tokens / remaining_partitions
-        #print(f"ideal_partition_len = {ideal_partition_len}")
         optimal_stride: float = chunk_len - ideal_partition_len
-        #print(f"optimal_stride = {optimal_stride}")
         if optimal_stride < min_stride:
             optimal_stride = 1.0*min_stride
         optimal_step_size:float =  chunk_len - optimal_stride

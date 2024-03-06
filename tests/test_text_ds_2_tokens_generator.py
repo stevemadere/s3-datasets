@@ -449,13 +449,14 @@ if os.environ['S3_TEXT_DATASET_BUCKET']:
         max_waste = 64
         bucket_name = os.environ['S3_TEXT_DATASET_BUCKET']
         bucket_prefix = os.environ.get('S3_TEXT_DATASET_PREFIX','')
+        reasonable_chunks_per_text = float(os.environ.get('EXPECTED_CHUNKS_PER_TEXT','16'))
+        max_relative_uncertainty = float(os.environ.get('AVAILABLE_CHUNKS_UNCERTAINTY','0.05'))
 
         large_text_ds = S3TextDataset.from_bucket(bucket_name, prefix=bucket_prefix)
         num_texts = len(large_text_ds)
 
-        generator:TextDS2TokensGenerator = TextDS2TokensGenerator(large_text_ds, ascii_tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste)
+        generator:TextDS2TokensGenerator = TextDS2TokensGenerator(large_text_ds, ascii_tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste, verbose=True)
 
-        max_relative_uncertainty = 0.1
         allowable_slop = 0.5
         (chunks_estimate, uncertainty) = generator.estimate_available_chunks(max_relative_uncertainty = max_relative_uncertainty)
 
@@ -463,7 +464,6 @@ if os.environ['S3_TEXT_DATASET_BUCKET']:
         print(f"chunks_estimate and uncertainty returned was ({chunks_estimate}, {uncertainty})")
 
 
-        reasonable_chunks_per_text = 17.7
         reasonable_num_chunks = reasonable_chunks_per_text * num_texts
 
         ridiculously_low_estimate = 0
