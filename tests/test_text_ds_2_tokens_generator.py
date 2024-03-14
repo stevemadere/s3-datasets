@@ -164,7 +164,9 @@ def test_text_ds_2_tokens_generator_one_doc(single_text_item_dataset) -> None:
 
     iterable_ds:datasets.IterableDataset = datasets.IterableDataset.from_generator(generator)
 
+    assert not generator.exhausted
     chunks:list[DSItem] = [cast(DSItem,item) for item in iterable_ds]
+    assert generator.exhausted
 
     assert len(chunks[0]["input_ids"]) == chunk_len
     for chunk in chunks:
@@ -196,7 +198,10 @@ def test_text_ds_2_tokens_generator_multi_doc(multiple_text_item_dataset) -> Non
 
     iterable_ds:datasets.IterableDataset = datasets.IterableDataset.from_generator(generator)
 
+    assert not generator.exhausted
     chunks:list[DSItem] = [cast(DSItem,item) for item in iterable_ds]
+    assert generator.exhausted
+
     assert len(chunks[0]["input_ids"]) == chunk_len
     for chunk in chunks:
         assert len(chunk["input_ids"]) == chunk_len
@@ -215,7 +220,6 @@ def test_text_ds_2_tokens_generator_multi_doc(multiple_text_item_dataset) -> Non
         position_of_second_text_in_long_text = texts[0].find(second_text)
         assert position_of_second_text_in_long_text > max_waste
         assert position_of_second_text_in_long_text < len(texts[0])-chunk_len
-
 
 
 def test_features_dict_standard_keys(multiple_text_item_dataset) -> None:
@@ -256,8 +260,11 @@ def test_text_ds_2_tokens_generator_exhaustion(multiple_text_item_dataset) -> No
 
     num_items:int = 0
     for ds_item in tokens_ds:
+        assert not generator.exhausted
         assert ds_item
         num_items += 1
+
+    assert generator.exhausted
     expected_num_items = 83 if use_ascii_tokenizer  else 26
     assert num_items  == expected_num_items
 
@@ -272,6 +279,7 @@ def test_text_ds_2_tokens_get_cursor(multiple_text_item_dataset) -> None:
     prev_cursor = None
     num_items:int = 0
     for ds_item in tokens_ds:
+        assert not generator.exhausted
         assert ds_item
         num_items += 1
         cursor = generator.get_cursor()
@@ -279,6 +287,9 @@ def test_text_ds_2_tokens_get_cursor(multiple_text_item_dataset) -> None:
         if prev_cursor:
             assert cursor > prev_cursor
         prev_cursor =  copy.deepcopy(cursor)
+
+    assert generator.exhausted
+
     cursor = generator.get_cursor()
     assert cursor and cursor.source_index == len(multiple_text_item_dataset)
     expected_num_items = 83 if use_ascii_tokenizer  else 26
@@ -318,6 +329,7 @@ def test_text_ds_2_tokens_get_cursor_with_iterable_ds(multiple_text_item_dataset
     prev_cursor = None
     num_items:int = 0
     for ds_item in tokens_ds:
+        assert not generator.exhausted
         assert ds_item
         num_items += 1
         cursor = generator.get_cursor()
@@ -325,6 +337,9 @@ def test_text_ds_2_tokens_get_cursor_with_iterable_ds(multiple_text_item_dataset
         if prev_cursor:
             assert cursor > prev_cursor
         prev_cursor =  copy.deepcopy(cursor)
+
+    assert generator.exhausted
+
     cursor = generator.get_cursor()
     assert cursor and cursor.source_index == len(multiple_text_item_dataset)
     expected_num_items = 83 if use_ascii_tokenizer  else 26
@@ -349,6 +364,7 @@ def test_set_cursor(multiple_text_item_dataset) -> None:
     prev_cursor:DSGeneratorCursor|None = None
     num_items:int = 0
     for ds_item in tokens_ds:
+        assert not generator.exhausted
         # print(f"item at cursor {cursor.to_dict().__repr__()}")
         assert ds_item
         num_items += 1
@@ -358,6 +374,8 @@ def test_set_cursor(multiple_text_item_dataset) -> None:
         if prev_cursor:
             assert cursor > prev_cursor
         prev_cursor =  copy.deepcopy(cursor)
+
+    assert generator.exhausted
 
     generator2:TextDS2TokensGenerator = TextDS2TokensGenerator(multiple_text_item_dataset, tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste)
     for (cursor, ds_item) in reversed(items_at_cursors):
@@ -383,6 +401,8 @@ def test_set_cursor_with_iterable_source(multiple_text_item_dataset) -> None:
     generator:TextDS2TokensGenerator = TextDS2TokensGenerator(iterable_ds, tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste)
     tokens_ds= datasets.IterableDataset.from_generator(generator)
 
+    assert not generator.exhausted
+
 
     # print(f"original cursor {generator.get_cursor().to_dict().__repr__()}")
     tokens_ds= datasets.IterableDataset.from_generator(generator)
@@ -392,7 +412,9 @@ def test_set_cursor_with_iterable_source(multiple_text_item_dataset) -> None:
     cursor:DSGeneratorCursor = generator.get_cursor()
     prev_cursor:DSGeneratorCursor|None = None
     num_items:int = 0
+
     for ds_item in tokens_ds:
+        assert not generator.exhausted
         # print(f"item at cursor {cursor.to_dict().__repr__()}")
         assert ds_item
         num_items += 1
@@ -402,6 +424,8 @@ def test_set_cursor_with_iterable_source(multiple_text_item_dataset) -> None:
         if prev_cursor:
             assert cursor > prev_cursor
         prev_cursor =  copy.deepcopy(cursor)
+
+    assert generator.exhausted
 
     iterable_ds2:datasets.IterableDataset = multiple_text_item_dataset.to_iterable_dataset()
     generator2:TextDS2TokensGenerator = TextDS2TokensGenerator(iterable_ds2, tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste)
@@ -425,7 +449,7 @@ def test_estimate_available_chunks_smoke(multiple_text_item_dataset) -> None:
     (chunks_estimate, uncertainty) = generator.estimate_available_chunks(max_relative_uncertainty = max_relative_uncertainty)
 
     assert chunks_estimate
-    print(f"uncertainty returned was {uncertainty}")
+    # print(f"uncertainty returned was {uncertainty}")
 
     actual_number_of_chunks = len(list(generator))
 
@@ -455,13 +479,13 @@ if os.environ['S3_TEXT_DATASET_BUCKET']:
         large_text_ds = S3TextDataset.from_bucket(bucket_name, prefix=bucket_prefix)
         num_texts = len(large_text_ds)
 
-        generator:TextDS2TokensGenerator = TextDS2TokensGenerator(large_text_ds, ascii_tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste, verbose=True)
+        generator:TextDS2TokensGenerator = TextDS2TokensGenerator(large_text_ds, ascii_tokenizer, chunk_len=chunk_len, min_stride= min_stride, max_waste=max_waste, verbose=False)
 
         allowable_slop = 0.5
         (chunks_estimate, uncertainty) = generator.estimate_available_chunks(max_relative_uncertainty = max_relative_uncertainty)
 
         assert chunks_estimate
-        print(f"chunks_estimate and uncertainty returned was ({chunks_estimate}, {uncertainty})")
+        # print(f"chunks_estimate and uncertainty returned was ({chunks_estimate}, {uncertainty})")
 
 
         reasonable_num_chunks = reasonable_chunks_per_text * num_texts

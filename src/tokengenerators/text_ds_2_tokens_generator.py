@@ -135,6 +135,7 @@ class DSGeneratorCursor:
 
     source_index: int
     chunk_index: int
+    exhausted: bool # indicates that iteration hit the end since cursor was set
 
     def __init__(self, source_index: int= 0, chunk_index: int = 0):
         if source_index < 0:
@@ -143,6 +144,7 @@ class DSGeneratorCursor:
             raise ValueError("chunk_index must be >= 0")
         self.source_index = source_index
         self.chunk_index = chunk_index
+        self.exhausted = False
 
     # < comparison operator
     def __lt__(self, other: 'DSGeneratorCursor') -> bool:
@@ -330,6 +332,7 @@ class TextDS2TokensGenerator:
         else:
             self._current_item_chunks = item_chunks
             self._cursor = copy.deepcopy(new_cursor)
+            self.exhausted = False
 
     def features(self, force: bool = False) -> Features:
         """ Generate a Features object suitable for passing to IterableDataset.from_generator().
@@ -481,6 +484,7 @@ class TextDS2TokensGenerator:
                 item = self._current_item_chunks[self._cursor.chunk_index]
                 self._advance_cursor_without_read(len(self._current_item_chunks))
             except IndexError:
+                self.exhausted = True
                 raise StopIteration
             assert self._cursor
             return item
