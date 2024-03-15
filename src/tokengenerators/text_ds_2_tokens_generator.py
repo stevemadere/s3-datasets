@@ -1,5 +1,5 @@
 import torch
-from transformers import PreTrainedTokenizerFast, BatchEncoding
+from transformers import PreTrainedTokenizerBase, BatchEncoding
 from datasets import Dataset, IterableDataset, Features, Sequence, Value
 from typing import NewType, Dict, List, Any, Iterator, cast
 from functools import total_ordering
@@ -236,7 +236,7 @@ class TextDS2TokensGenerator:
     """
     construction_dataset: Dataset|IterableDataset
     source_dataset: Dataset|AddressableWrapOfIterableDataset
-    base_tokenizer: PreTrainedTokenizerFast
+    base_tokenizer: PreTrainedTokenizerBase
     text_field_name: str
     chunk_len: int
     min_stride: int
@@ -248,7 +248,7 @@ class TextDS2TokensGenerator:
 
     def __init__(self,
                  source_dataset: Dataset|IterableDataset,
-                 base_tokenizer: PreTrainedTokenizerFast,
+                 base_tokenizer: PreTrainedTokenizerBase,
                  text_field_name: str = "text",
                  chunk_len: int = 4096,
                  min_stride: int = 64,

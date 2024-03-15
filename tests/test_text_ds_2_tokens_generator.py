@@ -449,6 +449,7 @@ def test_estimate_available_chunks_smoke(multiple_text_item_dataset) -> None:
     (chunks_estimate, uncertainty) = generator.estimate_available_chunks(max_relative_uncertainty = max_relative_uncertainty)
 
     assert chunks_estimate
+    assert uncertainty
     # print(f"uncertainty returned was {uncertainty}")
 
     actual_number_of_chunks = len(list(generator))
@@ -485,6 +486,7 @@ if os.environ['S3_TEXT_DATASET_BUCKET']:
         (chunks_estimate, uncertainty) = generator.estimate_available_chunks(max_relative_uncertainty = max_relative_uncertainty)
 
         assert chunks_estimate
+        assert uncertainty
         # print(f"chunks_estimate and uncertainty returned was ({chunks_estimate}, {uncertainty})")
 
 
