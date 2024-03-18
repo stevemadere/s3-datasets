@@ -23,7 +23,7 @@ class S3Dataset:
     are to be used as part of the Dataset.
 
     Instances of this class can be converted to actual Dataset instances via the methods
-    to_keys_dataset() (just the selected keys) and to_full_dataset() (both keys and content). 
+    to_keys_dataset() (just the selected keys) and to_full_dataset() (both keys and content).
 
     The Dataset returned by to_full_dataset() is loaded lazily from a generator to
     reduce memory footprint. i.e.  Initially, only the keys of the selected S3 objects
@@ -129,7 +129,7 @@ class S3Dataset:
             from a bucket.
             Takes the same arguments as the constructor.
 
-            Instead, you should just call to the constructor to make an 
+            Instead, you should just call to the constructor to make an
             S3Dataset and then call to_full_dataset() on that object.
             to get the same result.
         """
@@ -161,6 +161,7 @@ class S3Dataset:
         # Reinitialize the s3_client
         self.s3_client= cast(BotocoreBaseClient, boto3.client('s3'))
 
+    @cache.memoize()
     def _get_keys_with_prefix(self, prefix: str) -> List[str]:
         response = self.s3_client.list_objects_v2(Bucket=self.bucket_name, Prefix=prefix)
         keys: List[str] = [item['Key'] for item in response.get('Contents', [])]

@@ -135,6 +135,11 @@ tokenized_dataset = Dataset.from_generator(generator)
 - **Waste (`max_waste`)**: Fine-tune the balance between coverage and efficiency by specifying the maximum number of tokens that can be disregarded (never seen during training) at the end of a document.
 - **Inclusion of Original Keys (`include_all_keys`)**: Optionally include all key-value pairs from the original dataset items in the tokenized output, excluding the text itself.  (This is mostly used for debugging and profiling)
 
+
+### Testing
+1. Copy the file _example.env_ to _.env_ and customize its contents
+2. pytest
+
 ```
 
 
