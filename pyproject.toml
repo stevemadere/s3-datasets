@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "s3datasets"
-version = "2.0.0a3"
+version = "2.1.0"
 authors = [
   { name="Steve Madere", email="steve@stevemadere.com" },
 ]
