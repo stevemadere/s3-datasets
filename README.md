@@ -17,7 +17,7 @@ Ensure you have Python 3.6+ installed. Install the module and its dependencies v
 pip install s3datasets
 
 # or from source
-# pip install "git+https://github.com/stevemadere/s3-datasets.git@v2.0"
+# pip install "git+https://github.com/stevemadere/s3-datasets.git@v2.1.1"
 
 ```
 
